@@ -3962,7 +3962,8 @@ function audioDrama(book, category) {
   return {
     id: host.dramaId(sourceId), source: host.source, sourceId, title, name: title, desc: intro, intro,
     cover, coverUrl: cover, categoryName: firstNonEmpty(genre, category), channelName: "红果听书",
-    remark: count !== "" ? "共" + count + "章" : "", totalEpisode: count, episodeCount: count, tags,
+    remark: count !== "" ? "共" + count + "章" : "", badge: count !== "" ? category + " · 共 " + count + " 章" : category,
+    totalEpisode: count, episodeCount: count, tags,
   };
 }
 
