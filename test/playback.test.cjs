@@ -29,9 +29,15 @@ function load(response) {
       return Uint8Array.from(raw);
     },
     md5: (value) => Uint8Array.from(crypto.createHash("md5").update(Buffer.from(value)).digest()),
+    sha512: (value) => Uint8Array.from(crypto.createHash("sha512").update(Buffer.from(value)).digest()),
     randomBytes: (size) => Uint8Array.from(crypto.randomBytes(size)),
     aesCbcEncrypt: (key, iv, value) => {
       const cipher = crypto.createCipheriv("aes-128-cbc", Buffer.from(key), Buffer.from(iv));
+      cipher.setAutoPadding(false);
+      return Uint8Array.from(Buffer.concat([cipher.update(Buffer.from(value)), cipher.final()]));
+    },
+    aesCbcDecrypt: (key, iv, value) => {
+      const cipher = crypto.createDecipheriv("aes-128-cbc", Buffer.from(key), Buffer.from(iv));
       cipher.setAutoPadding(false);
       return Uint8Array.from(Buffer.concat([cipher.update(Buffer.from(value)), cipher.final()]));
     },
@@ -169,4 +175,87 @@ test("v5 digest and carrier match independent synthetic vectors", () => {
     for (const [key, value] of Object.entries(values)) assert.equal(url.searchParams.get(key), value);
   }
   assert.equal(JSON.stringify(values), before);
+});
+
+const playUrlSalt = "4dd4c2e6b83162090e52b3c7a6733ba41cb2462b829ab58a196b39db57177524f49baf7f08e8d68d26a72e37c1a95a2f1f05a51892aef2949732b62a38aadd58";
+
+function sealPlayUrl(address, seedText) {
+  const seed = Buffer.from(seedText, "base64");
+  const salt = Buffer.from(playUrlSalt, "hex");
+  const digest = crypto.createHash("sha512").update(Buffer.concat([crypto.createHash("sha512").update(seed).digest(), salt])).digest();
+  const pad = 16 - (Buffer.byteLength(address) % 16);
+  const plain = Buffer.concat([Buffer.from(address), Buffer.alloc(pad, pad)]);
+  const cipher = crypto.createCipheriv("aes-128-cbc", digest.subarray(0, 16), digest.subarray(16, 32));
+  cipher.setAutoPadding(false);
+  return Buffer.concat([Buffer.from([0xa8, 0x00, 0x01, 0x00]), cipher.update(plain), cipher.final()]).toString("base64");
+}
+
+const fallbackEndpoint = "https://vas.example.invalid/video/fplay/1/synthetic/synthetic-video?aid=8662&codec_type=4&stream_type=encrypt";
+const bytevc2Model = {
+  video_duration: 80.5,
+  fallback_api: { fallback_api: fallbackEndpoint },
+  video_list: [{ main_url: "https://media.example.invalid/vvc.mp4", video_meta: { codec_type: "bytevc2", definition: "1080p" } }],
+};
+
+function fallbackResponse(codecType) {
+  const seedText = Buffer.from("synthetic-play-url-seed-value").toString("base64");
+  return {
+    video_info: {
+      data: {
+        video_duration: 80.5,
+        key_seed: seedText,
+        video_list: {
+          video_1: { definition: "720p", codec_type: codecType, vwidth: 720, vheight: 1280, main_url: sealPlayUrl("https://media.example.invalid/h265-720.mp4", seedText) },
+          video_2: { definition: "1080p", codec_type: codecType, vwidth: 1080, vheight: 1920, main_url: sealPlayUrl("https://media.example.invalid/h265-1080.mp4", seedText), backup_url_1: sealPlayUrl("https://media.example.invalid/h265-1080-backup.mp4", seedText) },
+        },
+      },
+    },
+  };
+}
+
+test("bytevc2-only episodes fall back to the decoded h265 endpoint", () => {
+  const { api, requests } = load((request) => (request.url.includes("/video_tab/")
+    ? { code: 0, data: { video_model_data: { [videoId]: { video_model: JSON.stringify(bytevc2Model) } } } }
+    : fallbackResponse("h265")));
+  const media = api.test.fetchAppMedia(videoId, false);
+  assert.equal(media.url, "https://media.example.invalid/h265-1080.mp4");
+  assert.equal(media.quality, 1080);
+  assert.equal(media.durationMs, 80500);
+  assert.equal(media.variants.length, 3);
+  assert.equal(requests.length, 2);
+  const fallback = new URL(requests[1].url);
+  assert.equal(fallback.hostname, "vas.example.invalid");
+  assert.equal(fallback.searchParams.get("codec_type"), "1");
+  assert.equal(fallback.searchParams.get("stream_type"), "encrypt");
+});
+
+test("fallback without a compatible codec reports both failures", () => {
+  const { api, requests } = load((request) => (request.url.includes("/video_tab/")
+    ? { code: 0, data: { video_model_data: { [videoId]: { video_model: JSON.stringify(bytevc2Model) } } } }
+    : fallbackResponse("bytevc2")));
+  assert.throws(() => api.test.fetchAppMedia(videoId, false), /备用线路/);
+  assert.equal(requests.length, 3);
+});
+
+test("unknown play url version reports the version instead of failing silently", () => {
+  const unknown = Buffer.concat([Buffer.from([0xa8, 0x00, 0x02, 0x00]), Buffer.alloc(32, 7)]).toString("base64");
+  const { api, requests } = load((request) => (request.url.includes("/video_tab/")
+    ? { code: 0, data: { video_model_data: { [videoId]: { video_model: JSON.stringify(bytevc2Model) } } } }
+    : { video_info: { data: { key_seed: Buffer.from("synthetic-play-url-seed-value").toString("base64"), video_list: {
+      video_1: { definition: "1080p", codec_type: "h265", vwidth: 1080, vheight: 1920, main_url: unknown },
+    } } } }));
+  assert.throws(() => api.test.fetchAppMedia(videoId, false), /编码版本 2/);
+  assert.equal(requests.length, 3);
+});
+
+test("plain play urls pass through and an unknown version on one field is skipped", () => {
+  const unknown = Buffer.concat([Buffer.from([0xa8, 0x00, 0x02, 0x00]), Buffer.alloc(32, 7)]).toString("base64");
+  const { api } = load((request) => (request.url.includes("/video_tab/")
+    ? { code: 0, data: { video_model_data: { [videoId]: { video_model: JSON.stringify(bytevc2Model) } } } }
+    : { video_info: { data: { key_seed: Buffer.from("synthetic-play-url-seed-value").toString("base64"), video_list: {
+      video_1: { definition: "1080p", codec_type: "h265", main_url: "https://media.example.invalid/plain.mp4", backup_url_1: unknown },
+    } } } }));
+  const media = api.test.fetchAppMedia(videoId, false);
+  assert.equal(media.url, "https://media.example.invalid/plain.mp4");
+  assert.equal(media.variants.length, 1);
 });
