@@ -52,7 +52,7 @@ function load(response) {
     fetchText: () => { throw new Error("Offline test: webpage fallback"); },
   };
   const context = vm.createContext({ host, module: { exports: {} } });
-  vm.runInContext(source + "\nmodule.exports.test = { fetchAppMedia, appRequest, paths };", context);
+  vm.runInContext(source + "\nmodule.exports.test = { fetchAppMedia, fetchPlayerMedia, appRequest, paths };", context);
   context.module.exports.restoreCatalogState(state);
   return { api: context.module.exports, requests, context, host };
 }
@@ -61,7 +61,7 @@ for (const nested of [false, true]) {
   test("playback uses v5 and the exact episode in " + (nested ? "1004" : "flat") + " responses", () => {
     const entries = { [videoId]: { video_model: JSON.stringify(model) }, "7700000000000000002": { video_model: {} } };
     const { api, requests } = load({ code: 0, data: nested ? { "1004": entries } : entries });
-    const media = api.test.fetchAppMedia(videoId, false);
+    const media = api.test.fetchPlayerMedia(videoId, false);
     assert.equal(media.url, "https://media.example.invalid/main.mp4");
     assert.equal(media.quality, 1080);
     assert.equal(media.durationMs, 80500);
@@ -85,19 +85,47 @@ for (const nested of [false, true]) {
   });
 }
 
+test("playback prefers the signed video tab request", () => {
+  const { api, requests } = load({ code: 0, data: { video_model_data: { [videoId]: { video_model: JSON.stringify(model) } } } });
+  const media = api.test.fetchAppMedia(videoId, false);
+  assert.equal(media.url, "https://media.example.invalid/main.mp4");
+  assert.equal(media.variants.length, 2);
+  assert.equal(requests.length, 1);
+  const request = requests[0];
+  const url = new URL(request.url);
+  assert.equal(request.method, "GET");
+  assert.equal(url.hostname, "api5-normal-sinfonlineb.fqnovel.com");
+  assert.equal(url.pathname, "/reading/bookapi/video_tab/multi_video_model/v1/");
+  assert.equal(url.searchParams.get("video_id"), videoId);
+  assert.equal(url.searchParams.get("device_id"), state.deviceId);
+  assert.equal(request.headers["X-Gorgon"], undefined);
+  assert.equal(request.headers["X-SS-STUB"], undefined);
+  assert(request.headers["X-Medusa"] && request.headers["X-Helios"]);
+});
+
+test("video tab without the episode falls back to the player request", () => {
+  const { api, requests } = load((request) => request.url.includes("/video_tab/")
+    ? { code: 0, data: { video_model_data: { "7700000000000000002": { video_model: model } } } }
+    : { code: 0, data: { [videoId]: { video_model: model } } });
+  const media = api.test.fetchAppMedia(videoId, false);
+  assert.equal(media.url, "https://media.example.invalid/main.mp4");
+  assert.equal(requests.length, 2);
+  assert.equal(new URL(requests[1].url).pathname, "/novel/player/multi_video_model/player/v1");
+});
+
 test("missing requested episode cannot use another episode", () => {
   const { api, requests } = load({ code: 0, data: { "7700000000000000002": { video_model: model } } });
-  assert.throws(() => api.test.fetchAppMedia(videoId, false), /所请求的分集/);
+  assert.throws(() => api.test.fetchPlayerMedia(videoId, false), /所请求的分集/);
   assert.equal(requests.length, 1);
 });
 
 test("malformed and rejected models fail explicitly", () => {
   for (const encoded of ["broken", "[]", "42"]) {
     const { api } = load({ code: 0, data: { [videoId]: { video_model: encoded } } });
-    assert.throws(() => api.test.fetchAppMedia(videoId, false), /格式异常/);
+    assert.throws(() => api.test.fetchPlayerMedia(videoId, false), /格式异常/);
   }
   const { api } = load({ code: 403, data: { [videoId]: { video_model: model } } });
-  assert.throws(() => api.test.fetchAppMedia(videoId, false), /403/);
+  assert.throws(() => api.test.fetchPlayerMedia(videoId, false), /403/);
 });
 
 test("catalog and detail keep the previous signing and endpoint", () => {
