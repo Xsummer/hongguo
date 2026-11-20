@@ -4075,7 +4075,7 @@ function audioEntry(bookId) {
     }
     chapters.push({
       id: host.chapterId(drama.sourceId, itemId), source: host.source, title: mapString(item, "title") || "第" + (index + 1) + "章",
-      videoUrl: audioScheme + itemId, currentEpisode: index + 1,
+      videoUrl: audioScheme + itemId, currentEpisode: index + 1, mediaType: "audio",
     });
   });
   if (chapters.length === 0) {
