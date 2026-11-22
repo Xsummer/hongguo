@@ -29,11 +29,17 @@ function load(response) {
       return Uint8Array.from(raw);
     },
     md5: (value) => Uint8Array.from(crypto.createHash("md5").update(Buffer.from(value)).digest()),
+    sha512: (value) => Uint8Array.from(crypto.createHash("sha512").update(Buffer.from(value)).digest()),
     randomBytes: (size) => Uint8Array.from(crypto.randomBytes(size)),
     aesCbcEncrypt: (key, iv, value) => {
       const cipher = crypto.createCipheriv("aes-128-cbc", Buffer.from(key), Buffer.from(iv));
       cipher.setAutoPadding(false);
       return Uint8Array.from(Buffer.concat([cipher.update(Buffer.from(value)), cipher.final()]));
+    },
+    aesCbcDecrypt: (key, iv, value) => {
+      const decipher = crypto.createDecipheriv("aes-128-cbc", Buffer.from(key), Buffer.from(iv));
+      decipher.setAutoPadding(false);
+      return Uint8Array.from(Buffer.concat([decipher.update(Buffer.from(value)), decipher.final()]));
     },
     parseUrl: (value) => {
       const url = new URL(value);
@@ -165,6 +171,44 @@ test("incompatible codecs are retried on the pc lane", () => {
   assert.deepEqual(lanes, ["android", "pc"]);
   assert.equal(new URL(requests[1].url).pathname, "/reading/bookapi/video_tab/multi_video_model/v1/");
   assert.equal(new URL(requests[1].url).searchParams.get("device_id"), state.deviceId);
+});
+
+test("the fallback play api replaces the codec and unwraps the plain stream", () => {
+  const salt = "4dd4c2e6b83162090e52b3c7a6733ba41cb2462b829ab58a196b39db57177524f49baf7f08e8d68d26a72e37c1a95a2f1f05a51892aef2949732b62a38aadd58";
+  const seed = crypto.randomBytes(32);
+  const digest = crypto.createHash("sha512").update(Buffer.concat([
+    crypto.createHash("sha512").update(seed).digest(),
+    Buffer.from(salt, "hex"),
+  ])).digest();
+  const address = "https://media.example.invalid/fallback1080.mp4?token=abc";
+  const plain = Buffer.from(address, "utf8");
+  const pad = 16 - (plain.length % 16);
+  const padded = Buffer.concat([plain, Buffer.alloc(pad, pad)]);
+  const cipher = crypto.createCipheriv("aes-128-cbc", digest.subarray(0, 16), digest.subarray(16, 32));
+  cipher.setAutoPadding(false);
+  const ciphertext = Buffer.concat([cipher.update(padded), cipher.final()]);
+  const encoded = Buffer.concat([Buffer.from([0xa8, 0x00, 0x01, 0x00]), ciphertext]).toString("base64");
+  const vvc = { video_duration: 61.5, fallback_api: { fallback_api: "https://vas-lf-x.snssdk.com/video/fplay/1/deadbeef/" + videoId + "?aid=8662&codec_type=4&stream_type=encrypt" }, video_list: [
+    { main_url: "https://media.example.invalid/vvc.mp4", video_meta: { codec_type: "bytevc2", definition: "720p" }, gear_des_key: "1:encrypt|2:bytevc2|4:720p" },
+  ] };
+  const { api, requests } = load((request) => {
+    if (new URL(request.url).hostname === "vas-lf-x.snssdk.com") {
+      return { video_info: { data: { key_seed: seed.toString("base64"), video_duration: 61.5, video_list: {
+        video_1: { main_url: encoded, codec_type: "h264", definition: "1080p", vwidth: 1080, vheight: 1920, encrypt: false, spade_a: "", encryption_method: "" },
+      } } } };
+    }
+    return { code: 0, data: { video_model_data: { [videoId]: { video_model: vvc } } } };
+  });
+  const media = api.test.appMedia(videoId);
+  assert.equal(media.url, address);
+  assert.equal(media.quality, 1080);
+  assert.equal(media.cencKey, undefined);
+  assert.equal(media.durationMs, 61500);
+  const play = requests.find((request) => request.url.includes("/video/fplay/"));
+  assert(play);
+  const query = new URL(play.url).searchParams;
+  assert.deepEqual(query.getAll("codec_type"), ["1"]);
+  assert.deepEqual(query.getAll("stream_type"), ["plain"]);
 });
 
 test("an empty signature response is retried on the pc lane", () => {

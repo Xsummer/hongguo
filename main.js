@@ -26,6 +26,10 @@ const registerPauseMs = 10 * minuteMs;
 const webLockMs = 30 * minuteMs;
 const deviceRotateMs = 2 * minuteMs;
 const deviceRotateKey = "deviceRotated";
+const playUrlSalts = ["4dd4c2e6b83162090e52b3c7a6733ba41cb2462b829ab58a196b39db57177524f49baf7f08e8d68d26a72e37c1a95a2f1f05a51892aef2949732b62a38aadd58"];
+const playUrlHeaderSize = 4;
+const playUrlPattern = /^https?:\/\/\S+$/;
+const fallbackCodecTypes = ["1", "3"];
 const appRequestTimeoutMs = 20 * secondMs;
 const searchTimeoutMs = 40 * secondMs;
 const searchPageTimeoutMs = 12 * secondMs;
@@ -2388,7 +2392,7 @@ function fetchTabMedia(videoId, helper, platform) {
   if (isEmptyRecord(data)) {
     throw new Error("红果 App 未返回所请求的分集播放信息");
   }
-  return selectAppMedia(appVideoModel(data));
+  return mediaFromModel(appVideoModel(data));
 }
 
 function fetchPlayerMedia(videoId, helper, platform) {
@@ -2406,7 +2410,7 @@ function fetchPlayerMedia(videoId, helper, platform) {
   if (isEmptyRecord(data)) {
     throw new Error("红果 App 未返回所请求的分集播放信息");
   }
-  return selectAppMedia(appVideoModel(data));
+  return mediaFromModel(appVideoModel(data));
 }
 
 function appVideoModel(data) {
@@ -2504,6 +2508,178 @@ function selectAppMedia(model) {
     throw noMedia("已跳过不支持的编码");
   }
   throw noMedia("已跳过不支持的编码，其余线路没有播放地址");
+}
+
+function mediaFromModel(model) {
+  try {
+    return selectAppMedia(model);
+  } catch (error) {
+    if (!error.noCompatibleMedia) {
+      throw error;
+    }
+    return fallbackMedia(model, error);
+  }
+}
+
+function decodePlayUrl(encoded, seed) {
+  if (encoded === "" || seed === "") {
+    return encoded;
+  }
+  let key;
+  let raw;
+  try {
+    key = host.base64Decode(seed);
+    raw = host.base64Decode(encoded);
+  } catch (error) {
+    return encoded;
+  }
+  if (raw.length < 20 || raw[0] !== 0xa8 || raw[1] !== 0x00 || (raw.length - playUrlHeaderSize) % 16 !== 0) {
+    return encoded;
+  }
+  if (typeof host.sha512 !== "function") {
+    throw new Error("红果备用线路需要更新 App");
+  }
+  for (const salt of playUrlSalts) {
+    const address = decryptPlayUrl(raw, key, salt);
+    if (address !== "") {
+      return address;
+    }
+  }
+  throw failure("红果备用线路编码版本 " + (raw[2] | (raw[3] << 8)) + " 暂不支持", { unsupportedPlayUrl: true });
+}
+
+function decryptPlayUrl(raw, seed, salt) {
+  try {
+    const digest = host.sha512(concatBytes(host.sha512(seed), host.hexDecode(salt)));
+    const plain = host.aesCbcDecrypt(digest.subarray(0, 16), digest.subarray(16, 32), raw.subarray(playUrlHeaderSize));
+    const pad = plain[plain.length - 1];
+    if (pad < 1 || pad > 16 || pad > plain.length) {
+      return "";
+    }
+    for (let index = plain.length - pad; index < plain.length; index++) {
+      if (plain[index] !== pad) {
+        return "";
+      }
+    }
+    const address = host.utf8Decode(plain.subarray(0, plain.length - pad));
+    return playUrlPattern.test(address) ? address : "";
+  } catch (error) {
+    return "";
+  }
+}
+
+function fallbackEntries(data) {
+  const list = data.video_list;
+  if (Array.isArray(list)) {
+    return list;
+  }
+  if (isRecord(list)) {
+    return Object.keys(list).map((key) => list[key]);
+  }
+  return [];
+}
+
+function fallbackVariants(data) {
+  const seed = mapString(data, "key_seed");
+  const variants = [];
+  let versionError = null;
+  let decoded = 0;
+  for (const entry of fallbackEntries(data)) {
+    if (!isRecord(entry)) {
+      continue;
+    }
+    const variant = {
+      gear_des_key: mapString(entry, "gear_des_key"),
+      video_meta: {
+        codec_type: mapString(entry, "codec_type"),
+        definition: mapString(entry, "definition"),
+        vwidth: mapString(entry, "vwidth"),
+        vheight: mapString(entry, "vheight"),
+      },
+    };
+    for (const key of ["main_url", "backup_url_1", "backup_url_2"]) {
+      let address;
+      try {
+        address = decodePlayUrl(mapString(entry, key), seed);
+      } catch (error) {
+        if (!error.unsupportedPlayUrl) {
+          throw error;
+        }
+        versionError = error;
+        continue;
+      }
+      if (address !== "") {
+        variant[key] = address;
+        decoded++;
+      }
+    }
+    const spade = mapString(entry, "spade_a");
+    const method = mapString(entry, "encryption_method");
+    if (spade !== "" || method !== "" || entry.encrypt === true) {
+      variant.encrypt_info = { spade_a: spade, encryption_method: method, encrypt: entry.encrypt === true };
+    }
+    variants.push(variant);
+  }
+  if (versionError !== null && decoded === 0) {
+    throw versionError;
+  }
+  return variants;
+}
+
+function fetchFallbackPlay(endpoint, codecType) {
+  const replaceParam = (address, name, value) => {
+    const pattern = new RegExp("([?&])" + name + "=[^&]*");
+    if (pattern.test(address)) {
+      return address.replace(pattern, "$1" + name + "=" + value);
+    }
+    return address + (address.includes("?") ? "&" : "?") + name + "=" + value;
+  };
+  let address = replaceParam(endpoint, "codec_type", codecType);
+  address = replaceParam(address, "stream_type", "plain");
+  let response;
+  try {
+    response = host.fetch({
+      method: "GET", url: address, limit: responseLimit, timeoutMs: appRequestTimeoutMs,
+      followRedirects: true, anyStatus: true,
+      headers: { "User-Agent": playbackUserAgent, Accept: "application/json" },
+    });
+  } catch (error) {
+    throw new Error("红果备用线路请求失败：" + message(error));
+  }
+  if (response.status !== 200) {
+    throw new Error("红果备用线路 HTTP " + response.status);
+  }
+  let result;
+  try {
+    result = parseJson(response.body);
+  } catch (error) {
+    result = null;
+  }
+  const data = nested(result, "video_info", "data");
+  if (isEmptyRecord(data)) {
+    throw new Error("红果备用线路未返回有效数据");
+  }
+  return data;
+}
+
+function fallbackMedia(model, original) {
+  const endpoint = mapString(nested(model, "fallback_api"), "fallback_api");
+  if (endpoint === "") {
+    throw original;
+  }
+  let lastError = null;
+  for (const codecType of fallbackCodecTypes) {
+    try {
+      const data = fetchFallbackPlay(endpoint, codecType);
+      return selectAppMedia({ video_list: fallbackVariants(data), video_duration: mapString(data, "video_duration") });
+    } catch (error) {
+      if (!error.noCompatibleMedia && !error.unsupportedPlayUrl) {
+        throw new Error(message(original) + "；备用线路：" + message(error));
+      }
+      lastError = error;
+    }
+  }
+  throw failure(message(original) + "；备用线路：" + message(lastError), { noCompatibleMedia: true });
 }
 
 function webPlaybackRequest(path, payload) {
