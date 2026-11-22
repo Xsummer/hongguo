@@ -24,6 +24,8 @@ const defaultMaxPages = 50;
 const deviceRotations = 3;
 const registerPauseMs = 10 * minuteMs;
 const webLockMs = 30 * minuteMs;
+const deviceRotateMs = 2 * minuteMs;
+const deviceRotateKey = "deviceRotated";
 const appRequestTimeoutMs = 20 * secondMs;
 const searchTimeoutMs = 40 * secondMs;
 const searchPageTimeoutMs = 12 * secondMs;
@@ -1568,7 +1570,7 @@ function appRequest(method, path, extra, payload, options) {
       continue;
     }
     if (response.body.length === 0) {
-      lastError = new Error("红果 App 接口对本次设备签名返回空响应，风控未放行");
+      lastError = failure("红果 App 接口对本次设备签名返回空响应，风控未放行", { emptyBody: true });
       if (signed && rotations < deviceRotations) {
         try {
           ensureDevice(helper, deviceId);
@@ -1583,7 +1585,7 @@ function appRequest(method, path, extra, payload, options) {
         }
       }
       if (registerError !== null) {
-        lastError = new Error("红果 App 接口对本次设备签名返回空响应，风控未放行（设备注册失败：" + message(registerError) + "）");
+        lastError = failure("红果 App 接口对本次设备签名返回空响应，风控未放行（设备注册失败：" + message(registerError) + "）", { emptyBody: true });
       }
       continue;
     }
@@ -1594,7 +1596,7 @@ function appRequest(method, path, extra, payload, options) {
       result = null;
     }
     if (!isRecord(result)) {
-      throw new Error("红果 App 接口返回格式异常");
+      throw failure("红果 App 接口返回格式异常", { emptyBody: true });
     }
     const code = firstNonEmpty(mapString(result, "code", "Code", "status_code"), mapString(nested(result, "BaseResp"), "StatusCode"));
     if (code !== "" && code !== "0") {
@@ -2293,26 +2295,63 @@ function appMedia(videoId) {
   if (!numericId(videoId)) {
     throw new Error("红果视频 ID 无效");
   }
-  let lastError;
-  for (const helper of [false, true]) {
+  const skipped = [];
+  const run = (helper) => {
     for (const platform of appPlatforms) {
       try {
         return fetchAppMedia(videoId, helper, platform);
       } catch (error) {
-        if (!error.noCompatibleMedia) {
+        if (!error.noCompatibleMedia && !error.emptyBody) {
           throw error;
         }
-        lastError = error;
+        skipped.push(error);
       }
     }
+    return null;
+  };
+  const direct = run(false);
+  if (direct !== null) {
+    return direct;
+  }
+  if (!skipped.some((error) => error.emptyBody)) {
+    throw appMediaError(skipped);
   }
   const [rejected] = deviceOf(currentState(), true);
   try {
     ensureDevice(true, rejected);
-  } catch (rotateError) {
-    throw new Error(message(lastError) + "；更换辅助设备也没有成功：" + message(rotateError));
+    const rotated = run(true);
+    if (rotated !== null) {
+      return rotated;
+    }
+  } catch (error) {
+    skipped.push(error);
   }
-  return fetchAppMedia(videoId, true, appPlatforms[appPlatforms.length - 1]);
+  const [mainDevice] = deviceOf(currentState(), false);
+  if (mainDevice !== "" && cacheRead(deviceRotateKey) === null) {
+    cacheWrite(deviceRotateKey, 1, deviceRotateMs);
+    try {
+      ensureDevice(false, mainDevice);
+      const fresh = run(false);
+      if (fresh !== null) {
+        return fresh;
+      }
+    } catch (error) {
+      skipped.push(error);
+    }
+  }
+  throw appMediaError(skipped);
+}
+
+function appMediaError(skipped) {
+  const unsupported = skipped.some((error) => error && error.noCompatibleMedia);
+  const blocked = skipped.some((error) => error && error.emptyBody);
+  if (unsupported && blocked) {
+    throw failure("红果 App 两条取流车道都没成功：既有只给不兼容编码的分集，接口也在拦截本次设备", { noCompatibleMedia: true, emptyBody: true });
+  }
+  if (unsupported) {
+    throw failure("红果 App 未返回兼容的媒体：已跳过不支持的编码", { noCompatibleMedia: true });
+  }
+  throw failure("红果 App 接口对本次设备签名返回空响应，风控未放行，换设备重试也没通过", { emptyBody: true });
 }
 
 function fetchAppMedia(videoId, helper, platform) {
@@ -2320,7 +2359,7 @@ function fetchAppMedia(videoId, helper, platform) {
   try {
     return fetchTabMedia(videoId, helper, platform);
   } catch (error) {
-    if (error.noCompatibleMedia) {
+    if (error.noCompatibleMedia || error.emptyBody) {
       throw error;
     }
     tabError = error;
@@ -2328,7 +2367,7 @@ function fetchAppMedia(videoId, helper, platform) {
   try {
     return fetchPlayerMedia(videoId, helper, platform);
   } catch (error) {
-    if (error.noCompatibleMedia) {
+    if (error.noCompatibleMedia || error.emptyBody) {
       throw error;
     }
     throw new Error(message(tabError) + "；播放器接口：" + message(error));

@@ -167,6 +167,41 @@ test("incompatible codecs are retried on the pc lane", () => {
   assert.equal(new URL(requests[1].url).searchParams.get("device_id"), state.deviceId);
 });
 
+test("an empty signature response is retried on the pc lane", () => {
+  const { api, requests } = load((request) => {
+    const url = new URL(request.url);
+    if (url.pathname.startsWith("/service/2/device_register")) return { device_id: "555", install_id: "666" };
+    if (url.searchParams.get("device_platform") !== "pc") return { status: 200, body: "", headers: {} };
+    return { code: 0, data: { video_model_data: { [videoId]: { video_model: model } } } };
+  });
+  const media = api.test.appMedia(videoId);
+  assert.equal(media.url, "https://media.example.invalid/main.mp4");
+  const tabs = requests.filter((request) => request.url.includes("/video_tab/"));
+  assert(tabs.length >= 2);
+  assert.equal(new URL(tabs[tabs.length - 1].url).searchParams.get("device_platform"), "pc");
+});
+
+test("empty responses across lanes rotate the device before giving up", () => {
+  const { api, requests } = load((request) => {
+    const url = new URL(request.url);
+    if (url.pathname.startsWith("/service/2/device_register")) return { device_id: "555", install_id: "666" };
+    if (url.searchParams.get("device_id") === state.deviceId) return { status: 200, body: "", headers: {} };
+    return { code: 0, data: { video_model_data: { [videoId]: { video_model: model } } } };
+  });
+  const media = api.test.appMedia(videoId);
+  assert.equal(media.url, "https://media.example.invalid/main.mp4");
+  assert(requests.some((request) => request.url.includes("/service/2/device_register")));
+});
+
+test("an all-empty rotation reports the signature block", () => {
+  const { api } = load((request) => {
+    const url = new URL(request.url);
+    if (url.pathname.startsWith("/service/2/device_register")) return { device_id: "555", install_id: "666" };
+    return { status: 200, body: "", headers: {} };
+  });
+  assert.throws(() => api.test.appMedia(videoId), /风控未放行/);
+});
+
 test("catalog and detail keep the previous signing and endpoint", () => {
   const { api, requests } = load({ code: 0, data: {} });
   api.test.appRequest("POST", api.test.paths.videoDetail, null, { series_id: "7700000000000000000" });
