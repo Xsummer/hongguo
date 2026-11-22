@@ -173,42 +173,81 @@ test("incompatible codecs are retried on the pc lane", () => {
   assert.equal(new URL(requests[1].url).searchParams.get("device_id"), state.deviceId);
 });
 
-test("the fallback play api replaces the codec and unwraps the plain stream", () => {
+function fallbackFixture() {
   const salt = "4dd4c2e6b83162090e52b3c7a6733ba41cb2462b829ab58a196b39db57177524f49baf7f08e8d68d26a72e37c1a95a2f1f05a51892aef2949732b62a38aadd58";
   const seed = crypto.randomBytes(32);
   const digest = crypto.createHash("sha512").update(Buffer.concat([
     crypto.createHash("sha512").update(seed).digest(),
     Buffer.from(salt, "hex"),
   ])).digest();
-  const address = "https://media.example.invalid/fallback1080.mp4?token=abc";
-  const plain = Buffer.from(address, "utf8");
-  const pad = 16 - (plain.length % 16);
-  const padded = Buffer.concat([plain, Buffer.alloc(pad, pad)]);
-  const cipher = crypto.createCipheriv("aes-128-cbc", digest.subarray(0, 16), digest.subarray(16, 32));
-  cipher.setAutoPadding(false);
-  const ciphertext = Buffer.concat([cipher.update(padded), cipher.final()]);
-  const encoded = Buffer.concat([Buffer.from([0xa8, 0x00, 0x01, 0x00]), ciphertext]).toString("base64");
-  const vvc = { video_duration: 61.5, fallback_api: { fallback_api: "https://vas-lf-x.snssdk.com/video/fplay/1/deadbeef/" + videoId + "?aid=8662&codec_type=4&stream_type=encrypt" }, video_list: [
+  const encode = (address) => {
+    const plain = Buffer.from(address, "utf8");
+    const pad = 16 - (plain.length % 16);
+    const padded = Buffer.concat([plain, Buffer.alloc(pad, pad)]);
+    const cipher = crypto.createCipheriv("aes-128-cbc", digest.subarray(0, 16), digest.subarray(16, 32));
+    cipher.setAutoPadding(false);
+    const ciphertext = Buffer.concat([cipher.update(padded), cipher.final()]);
+    return Buffer.concat([Buffer.from([0xa8, 0x00, 0x01, 0x00]), ciphertext]).toString("base64");
+  };
+  return { seed, encode };
+}
+
+function vvcModel() {
+  return { video_duration: 61.5, fallback_api: { fallback_api: "https://vas-lf-x.snssdk.com/video/fplay/1/deadbeef/" + videoId + "?aid=8662&codec_type=4&stream_type=encrypt" }, video_list: [
     { main_url: "https://media.example.invalid/vvc.mp4", video_meta: { codec_type: "bytevc2", definition: "720p" }, gear_des_key: "1:encrypt|2:bytevc2|4:720p" },
   ] };
+}
+
+test("the fallback play api asks for the faststart ladder instead of the plain master", () => {
+  const { seed, encode } = fallbackFixture();
+  const vvc = vvcModel();
   const { api, requests } = load((request) => {
     if (new URL(request.url).hostname === "vas-lf-x.snssdk.com") {
       return { video_info: { data: { key_seed: seed.toString("base64"), video_duration: 61.5, video_list: {
-        video_1: { main_url: encoded, codec_type: "h264", definition: "1080p", vwidth: 1080, vheight: 1920, encrypt: false, spade_a: "", encryption_method: "" },
+        video_1: { main_url: encode("https://media.example.invalid/hevc-720.mp4"), codec_type: "h265", definition: "720p", vwidth: 720, vheight: 1280, encrypt: false, spade_a: "", encryption_method: "" },
+        video_2: { main_url: encode("https://media.example.invalid/hevc-1080.mp4"), codec_type: "h265", definition: "1080p", vwidth: 1080, vheight: 1920, encrypt: false, spade_a: "", encryption_method: "" },
       } } } };
     }
     return { code: 0, data: { video_model_data: { [videoId]: { video_model: vvc } } } };
   });
   const media = api.test.appMedia(videoId);
-  assert.equal(media.url, address);
+  assert.equal(media.url, "https://media.example.invalid/hevc-1080.mp4");
   assert.equal(media.quality, 1080);
   assert.equal(media.cencKey, undefined);
   assert.equal(media.durationMs, 61500);
-  const play = requests.find((request) => request.url.includes("/video/fplay/"));
-  assert(play);
-  const query = new URL(play.url).searchParams;
+  const plays = requests.filter((request) => request.url.includes("/video/fplay/"));
+  assert.equal(plays.length, 1);
+  const query = new URL(plays[0].url).searchParams;
+  assert.deepEqual(query.getAll("codec_type"), ["1"]);
+  assert.deepEqual(query.getAll("stream_type"), ["encrypt"]);
+});
+
+test("the plain master is only used when no ladder is offered", () => {
+  const { seed, encode } = fallbackFixture();
+  const vvc = vvcModel();
+  const { api, requests } = load((request) => {
+    const url = new URL(request.url);
+    if (url.hostname === "vas-lf-x.snssdk.com") {
+      if (url.searchParams.get("stream_type") !== "plain") {
+        // 备用接口的加密通道只给 VVC/H.266，没有可解码的档位。
+        return { video_info: { data: { key_seed: seed.toString("base64"), video_duration: 61.5, video_list: {
+          video_1: { main_url: encode("https://media.example.invalid/hevc-vvc.mp4"), codec_type: "bytevc2", definition: "1080p", encrypt: true, spade_a: "abc" },
+        } } } };
+      }
+      return { video_info: { data: { key_seed: seed.toString("base64"), video_duration: 61.5, video_list: {
+        video_1: { main_url: encode("https://media.example.invalid/master-1080.mp4?token=abc"), codec_type: "h264", definition: "1080p", vwidth: 1080, vheight: 1920, encrypt: false, spade_a: "", encryption_method: "" },
+      } } } };
+    }
+    return { code: 0, data: { video_model_data: { [videoId]: { video_model: vvc } } } };
+  });
+  const media = api.test.appMedia(videoId);
+  assert.equal(media.url, "https://media.example.invalid/master-1080.mp4?token=abc");
+  const plays = requests.filter((request) => request.url.includes("/video/fplay/"));
+  const plain = plays[plays.length - 1];
+  const query = new URL(plain.url).searchParams;
   assert.deepEqual(query.getAll("codec_type"), ["1"]);
   assert.deepEqual(query.getAll("stream_type"), ["plain"]);
+  assert(plays.length > 1);
 });
 
 test("an empty signature response is retried on the pc lane", () => {

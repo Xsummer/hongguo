@@ -30,6 +30,7 @@ const playUrlSalts = ["4dd4c2e6b83162090e52b3c7a6733ba41cb2462b829ab58a196b39db5
 const playUrlHeaderSize = 4;
 const playUrlPattern = /^https?:\/\/\S+$/;
 const fallbackCodecTypes = ["1", "3"];
+const fallbackStreamTypes = ["encrypt", "plain"];
 const appRequestTimeoutMs = 20 * secondMs;
 const searchTimeoutMs = 40 * secondMs;
 const searchPageTimeoutMs = 12 * secondMs;
@@ -2626,7 +2627,7 @@ function fallbackVariants(data) {
   return variants;
 }
 
-function fetchFallbackPlay(endpoint, codecType) {
+function fetchFallbackPlay(endpoint, codecType, streamType) {
   const replaceParam = (address, name, value) => {
     const pattern = new RegExp("([?&])" + name + "=[^&]*");
     if (pattern.test(address)) {
@@ -2635,7 +2636,7 @@ function fetchFallbackPlay(endpoint, codecType) {
     return address + (address.includes("?") ? "&" : "?") + name + "=" + value;
   };
   let address = replaceParam(endpoint, "codec_type", codecType);
-  address = replaceParam(address, "stream_type", "plain");
+  address = replaceParam(address, "stream_type", streamType);
   let response;
   try {
     response = host.fetch({
@@ -2668,15 +2669,17 @@ function fallbackMedia(model, original) {
     throw original;
   }
   let lastError = null;
-  for (const codecType of fallbackCodecTypes) {
-    try {
-      const data = fetchFallbackPlay(endpoint, codecType);
-      return selectAppMedia({ video_list: fallbackVariants(data), video_duration: mapString(data, "video_duration") });
-    } catch (error) {
-      if (!error.noCompatibleMedia && !error.unsupportedPlayUrl) {
-        throw new Error(message(original) + "；备用线路：" + message(error));
+  for (const streamType of fallbackStreamTypes) {
+    for (const codecType of fallbackCodecTypes) {
+      try {
+        const data = fetchFallbackPlay(endpoint, codecType, streamType);
+        return selectAppMedia({ video_list: fallbackVariants(data), video_duration: mapString(data, "video_duration") });
+      } catch (error) {
+        if (!error.noCompatibleMedia && !error.unsupportedPlayUrl) {
+          throw new Error(message(original) + "；备用线路：" + message(error));
+        }
+        lastError = error;
       }
-      lastError = error;
     }
   }
   throw failure(message(original) + "；备用线路：" + message(lastError), { noCompatibleMedia: true });
