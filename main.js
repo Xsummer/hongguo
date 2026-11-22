@@ -31,6 +31,8 @@ const playUrlHeaderSize = 4;
 const playUrlPattern = /^https?:\/\/\S+$/;
 const fallbackCodecTypes = ["1", "3"];
 const fallbackStreamTypes = ["encrypt", "plain"];
+const mediaCacheMs = 45 * minuteMs;
+const prefetchLimit = 15;
 const appRequestTimeoutMs = 20 * secondMs;
 const searchTimeoutMs = 40 * secondMs;
 const searchPageTimeoutMs = 12 * secondMs;
@@ -2275,7 +2277,7 @@ function resolveVideoMedia(task) {
   }
   let nativeError;
   try {
-    return appMedia(videoId);
+    return appMedia(videoId, seriesId);
   } catch (error) {
     nativeError = error;
   }
@@ -2296,15 +2298,56 @@ function webLockKey(videoId) {
   return "weblocked:" + videoId;
 }
 
-function appMedia(videoId) {
+function mediaCacheKey(videoId) {
+  return "media:" + videoId;
+}
+
+function upcomingVideos(seriesId, videoId) {
+  if (!numericId(seriesId)) {
+    return [];
+  }
+  const detail = cacheRead("detail:" + seriesId);
+  if (!isRecord(detail) || !Array.isArray(detail.chapters)) {
+    return [];
+  }
+  const ids = [];
+  for (const chapter of detail.chapters) {
+    if (isRecord(chapter) && typeof chapter.videoUrl === "string") {
+      ids.push(chapter.videoUrl.slice(cencScheme.length));
+    }
+  }
+  const at = ids.indexOf(videoId);
+  const tail = at >= 0 ? ids.slice(at + 1) : ids;
+  const picked = [];
+  for (const id of tail) {
+    if (numericId(id) && picked.indexOf(id) < 0) {
+      picked.push(id);
+    }
+    if (picked.length >= prefetchLimit - 1) {
+      break;
+    }
+  }
+  return picked;
+}
+
+function appMedia(videoId, seriesId) {
   if (!numericId(videoId)) {
     throw new Error("红果视频 ID 无效");
   }
+  const cached = cacheRead(mediaCacheKey(videoId));
+  if (isRecord(cached) && typeof cached.url === "string" && cached.url !== "") {
+    return cached;
+  }
+  const batch = upcomingVideos(seriesId, videoId);
+  const done = (media) => {
+    cacheWrite(mediaCacheKey(videoId), media, mediaCacheMs);
+    return media;
+  };
   const skipped = [];
   const run = (helper) => {
     for (const platform of appPlatforms) {
       try {
-        return fetchAppMedia(videoId, helper, platform);
+        return done(fetchAppMedia(videoId, helper, platform, batch));
       } catch (error) {
         if (!error.noCompatibleMedia && !error.emptyBody) {
           throw error;
@@ -2359,23 +2402,23 @@ function appMediaError(skipped) {
   throw failure("红果 App 接口对本次设备签名返回空响应，风控未放行，换设备重试也没通过", { emptyBody: true });
 }
 
-function fetchAppMedia(videoId, helper, platform) {
-  let tabError;
+function fetchAppMedia(videoId, helper, platform, batch) {
+  let playerError;
+  try {
+    return fetchPlayerMedia(videoId, helper, platform, batch);
+  } catch (error) {
+    if (error.noCompatibleMedia || error.emptyBody) {
+      throw error;
+    }
+    playerError = error;
+  }
   try {
     return fetchTabMedia(videoId, helper, platform);
   } catch (error) {
     if (error.noCompatibleMedia || error.emptyBody) {
       throw error;
     }
-    tabError = error;
-  }
-  try {
-    return fetchPlayerMedia(videoId, helper, platform);
-  } catch (error) {
-    if (error.noCompatibleMedia || error.emptyBody) {
-      throw error;
-    }
-    throw new Error(message(tabError) + "；播放器接口：" + message(error));
+    throw new Error(message(playerError) + "；视频列表接口：" + message(error));
   }
 }
 
@@ -2396,22 +2439,54 @@ function fetchTabMedia(videoId, helper, platform) {
   return mediaFromModel(appVideoModel(data));
 }
 
-function fetchPlayerMedia(videoId, helper, platform) {
+function fetchPlayerMedia(videoId, helper, platform, batch) {
+  const ids = [videoId];
+  for (const id of anyList(batch)) {
+    if (numericId(id) && ids.indexOf(id) < 0 && ids.length < prefetchLimit) {
+      ids.push(id);
+    }
+  }
   const payload = {
     biz_param: {
       detail_page_version: 0, device_level: 1, disable_digg_stat: false, disable_video_relate_book: false,
       need_all_video_definition: true, need_mp4_align: false, use_os_player: false, use_server_dns: false, video_platform: 1024,
     },
-    mixed_video_id_map: { "1004": [videoId] }, dr_scene: "player",
+    mixed_video_id_map: { "1004": ids }, dr_scene: "player",
   };
   const extra = platform ? { device_platform: platform } : null;
   const result = appRequest("POST", paths.videoModel, extra, payload, { helper });
   const entries = nested(result, "data");
-  const data = nested(isRecord(entries["1004"]) ? entries["1004"] : entries, videoId);
+  const root = isRecord(entries["1004"]) ? entries["1004"] : entries;
+  const data = nested(root, videoId);
   if (isEmptyRecord(data)) {
     throw new Error("红果 App 未返回所请求的分集播放信息");
   }
-  return mediaFromModel(appVideoModel(data));
+  const media = mediaFromModel(appVideoModel(data));
+  prefetchMedia(root, ids, videoId);
+  return media;
+}
+
+function prefetchMedia(root, ids, videoId) {
+  if (!isRecord(root)) {
+    return;
+  }
+  for (const id of ids) {
+    if (id === videoId || cacheRead(mediaCacheKey(id)) !== null) {
+      continue;
+    }
+    const entry = nested(root, id);
+    if (isEmptyRecord(entry)) {
+      continue;
+    }
+    try {
+      const media = selectAppMedia(appVideoModel(entry));
+      if (isRecord(media) && typeof media.url === "string" && media.url !== "") {
+        cacheWrite(mediaCacheKey(id), media, mediaCacheMs);
+      }
+    } catch (error) {
+      // 预取只做锦上添花，单集失败不影响当前播放
+    }
+  }
 }
 
 function appVideoModel(data) {

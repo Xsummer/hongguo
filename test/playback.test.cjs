@@ -48,6 +48,8 @@ function load(response) {
     preserveIntegers: (text) => text,
     cacheGet: (key) => cache.get(key) ?? null,
     cacheSet: (key, value) => cache.set(key, value),
+    dramaId: (sourceId) => "hongguo:" + sourceId,
+    chapterId: (dramaId, videoId) => dramaId + ":" + videoId,
     exclusive: (fn) => fn(),
     retries: () => 1,
     reserve: () => 1,
@@ -60,7 +62,7 @@ function load(response) {
     fetchText: () => { throw new Error("Offline test: webpage fallback"); },
   };
   const context = vm.createContext({ host, module: { exports: {} } });
-  vm.runInContext(source + "\nmodule.exports.test = { appMedia, fetchAppMedia, fetchTabMedia, fetchPlayerMedia, selectAppMedia, appRequest, paths, webMedia, webPlayback, webDesktopUserAgent, resolveVideoMedia, cencScheme };", context);
+  vm.runInContext(source + "\nmodule.exports.test = { appMedia, appDetail, fetchAppMedia, fetchTabMedia, fetchPlayerMedia, selectAppMedia, appRequest, paths, webMedia, webPlayback, webDesktopUserAgent, resolveVideoMedia, cencScheme };", context);
   context.module.exports.restoreCatalogState(state);
   return { api: context.module.exports, requests, context, host };
 }
@@ -93,32 +95,30 @@ for (const nested of [false, true]) {
   });
 }
 
-test("playback prefers the signed video tab request", () => {
-  const { api, requests } = load({ code: 0, data: { video_model_data: { [videoId]: { video_model: JSON.stringify(model) } } } });
+test("playback prefers the signed player request", () => {
+  const { api, requests } = load({ code: 0, data: { [videoId]: { video_model: JSON.stringify(model) } } });
   const media = api.test.fetchAppMedia(videoId, false);
   assert.equal(media.url, "https://media.example.invalid/main.mp4");
   assert.equal(media.variants.length, 2);
   assert.equal(requests.length, 1);
   const request = requests[0];
   const url = new URL(request.url);
-  assert.equal(request.method, "GET");
-  assert.equal(url.hostname, "api5-normal-sinfonlineb.fqnovel.com");
-  assert.equal(url.pathname, "/reading/bookapi/video_tab/multi_video_model/v1/");
-  assert.equal(url.searchParams.get("video_id"), videoId);
-  assert.equal(url.searchParams.get("device_id"), state.deviceId);
+  assert.equal(request.method, "POST");
+  assert.equal(url.hostname, "api5-normal-sinfonlinea.fqnovel.com");
+  assert.equal(url.pathname, "/novel/player/multi_video_model/player/v1");
   assert.equal(request.headers["X-Gorgon"], undefined);
-  assert.equal(request.headers["X-SS-STUB"], undefined);
-  assert(request.headers["X-Medusa"] && request.headers["X-Helios"]);
+  assert.equal(request.headers["X-SS-STUB"], crypto.createHash("md5").update(request.body).digest("hex").toUpperCase());
 });
 
-test("video tab without the episode falls back to the player request", () => {
-  const { api, requests } = load((request) => request.url.includes("/video_tab/")
-    ? { code: 0, data: { video_model_data: { "7700000000000000002": { video_model: model } } } }
-    : { code: 0, data: { [videoId]: { video_model: model } } });
+test("the video tab is used when the player request has no episode", () => {
+  const { api, requests } = load((request) => (request.url.includes("/video_tab/")
+    ? { code: 0, data: { video_model_data: { [videoId]: { video_model: model } } } }
+    : { code: 0, data: { "7700000000000000002": { video_model: model } } }));
   const media = api.test.fetchAppMedia(videoId, false);
   assert.equal(media.url, "https://media.example.invalid/main.mp4");
   assert.equal(requests.length, 2);
-  assert.equal(new URL(requests[1].url).pathname, "/novel/player/multi_video_model/player/v1");
+  assert.equal(new URL(requests[0].url).pathname, "/novel/player/multi_video_model/player/v1");
+  assert.equal(new URL(requests[1].url).pathname, "/reading/bookapi/video_tab/multi_video_model/v1/");
 });
 
 test("missing requested episode cannot use another episode", () => {
@@ -159,18 +159,104 @@ test("incompatible codecs are retried on the pc lane", () => {
   ] };
   const { api, requests } = load((request) => {
     const url = new URL(request.url);
-    if (url.searchParams.get("device_platform") !== "pc") return { code: 0, data: { video_model_data: { [videoId]: { video_model: vvc } } } };
-    return { code: 0, data: { video_model_data: { [videoId]: { video_model: { video_duration: 58.167, video_list: [
+    if (url.searchParams.get("device_platform") !== "pc") return { code: 0, data: { [videoId]: { video_model: vvc } } };
+    return { code: 0, data: { [videoId]: { video_model: { video_duration: 58.167, video_list: [
       { main_url: "https://media.example.invalid/pc720.mp4", definition: "720p", codec_type: "bytevc1", vwidth: 720, vheight: 1280 },
-    ] } } } } };
+    ] } } } };
   });
   const media = api.test.appMedia(videoId);
   assert.equal(media.url, "https://media.example.invalid/pc720.mp4");
   assert.equal(media.quality, 720);
   const lanes = requests.map((request) => (new URL(request.url).searchParams.get("device_platform") || "default"));
   assert.deepEqual(lanes, ["android", "pc"]);
-  assert.equal(new URL(requests[1].url).pathname, "/reading/bookapi/video_tab/multi_video_model/v1/");
+  assert.equal(new URL(requests[0].url).pathname, "/novel/player/multi_video_model/player/v1");
+  assert.equal(new URL(requests[1].url).pathname, "/novel/player/multi_video_model/player/v1");
   assert.equal(new URL(requests[1].url).searchParams.get("device_id"), state.deviceId);
+});
+
+test("the pc lane still falls back to the video tab when the player request fails", () => {
+  const vvc = { video_duration: 58.167, video_list: [
+    { main_url: "https://media.example.invalid/vvc.mp4", video_meta: { codec_type: "bytevc2", definition: "720p" }, gear_des_key: "1:encrypt|2:bytevc2|4:720p" },
+  ] };
+  const { api, requests } = load((request) => {
+    const url = new URL(request.url);
+    if (url.pathname === "/novel/player/multi_video_model/player/v1") return { code: 0, data: { "7700000000000000002": { video_model: vvc } } };
+    if (url.searchParams.get("device_platform") !== "pc") return { code: 0, data: { video_model_data: { [videoId]: { video_model: vvc } } } };
+    return { code: 0, data: { video_model_data: { [videoId]: { video_model: { video_duration: 58.167, video_list: [
+      { main_url: "https://media.example.invalid/pctab720.mp4", definition: "720p", codec_type: "bytevc1", vwidth: 720, vheight: 1280 },
+    ] } } } } };
+  });
+  const media = api.test.appMedia(videoId);
+  assert.equal(media.url, "https://media.example.invalid/pctab720.mp4");
+  const paths = requests.map((request) => new URL(request.url).pathname);
+  assert.deepEqual(paths, [
+    "/novel/player/multi_video_model/player/v1",
+    "/reading/bookapi/video_tab/multi_video_model/v1/",
+    "/novel/player/multi_video_model/player/v1",
+    "/reading/bookapi/video_tab/multi_video_model/v1/",
+  ]);
+});
+
+test("a resolved episode is served from the media cache without a second request", () => {
+  const { api, requests } = load({ code: 0, data: { [videoId]: { video_model: model } } });
+  const first = api.test.appMedia(videoId);
+  assert.equal(first.url, "https://media.example.invalid/main.mp4");
+  const count = requests.length;
+  const second = api.test.appMedia(videoId);
+  assert.equal(second.url, first.url);
+  assert.equal(requests.length, count);
+});
+
+test("one player call prefetches the next episodes from the cached detail", () => {
+  const next = ["7700000000000000011", "7700000000000000012"];
+  const { api, requests } = load((request) => {
+    if (request.url.includes("/video_detail/")) {
+      return { code: 0, data: { video_data: {
+        series_id: "7700000000000000000", series_name: "合成剧", episode_cnt: 3, video_list: [
+          { vid: videoId, vid_index: 1, series_id: "7700000000000000000" },
+          { vid: next[0], vid_index: 2, series_id: "7700000000000000000" },
+          { vid: next[1], vid_index: 3, series_id: "7700000000000000000" },
+        ],
+      } } };
+    }
+    return { code: 0, data: {
+      [videoId]: { video_model: model },
+      [next[0]]: { video_model: model },
+      [next[1]]: { video_model: model },
+    } };
+  });
+  api.test.appDetail("7700000000000000000");
+  const media = api.test.resolveVideoMedia({ dramaId: "hongguo:7700000000000000000", chapter: { videoUrl: api.test.cencScheme + videoId } });
+  assert.equal(media.url, "https://media.example.invalid/main.mp4");
+  const playerCalls = requests.filter((request) => request.url.includes("/multi_video_model/player/"));
+  assert.equal(playerCalls.length, 1);
+  assert.deepEqual(JSON.parse(playerCalls[0].body).mixed_video_id_map, { "1004": [videoId, next[0], next[1]] });
+  const count = requests.length;
+  const prefetched = api.test.resolveVideoMedia({ dramaId: "hongguo:7700000000000000000", chapter: { videoUrl: api.test.cencScheme + next[0] } });
+  assert.equal(prefetched.url, "https://media.example.invalid/main.mp4");
+  assert.equal(requests.length, count);
+});
+
+test("the prefetch batch never exceeds the endpoint limit", () => {
+  const total = 40;
+  const chapters = [];
+  for (let index = 1; index <= total; index++) {
+    chapters.push({ vid: "77000000000000" + String(10000 + index), vid_index: index, series_id: "7700000000000000000" });
+  }
+  const { api, requests } = load((request) => {
+    if (request.url.includes("/video_detail/")) {
+      return { code: 0, data: { video_data: { series_id: "7700000000000000000", series_name: "合成剧", episode_cnt: total, video_list: chapters } } };
+    }
+    const payload = JSON.parse(request.body);
+    const data = {};
+    for (const id of payload.mixed_video_id_map["1004"]) data[id] = { video_model: model };
+    return { code: 0, data };
+  });
+  api.test.appDetail("7700000000000000000");
+  api.test.resolveVideoMedia({ dramaId: "hongguo:7700000000000000000", chapter: { videoUrl: api.test.cencScheme + chapters[0].vid } });
+  const playerCalls = requests.filter((request) => request.url.includes("/multi_video_model/player/"));
+  assert.equal(playerCalls.length, 1);
+  assert.equal(JSON.parse(playerCalls[0].body).mixed_video_id_map["1004"].length, 15);
 });
 
 function fallbackFixture() {
@@ -255,13 +341,13 @@ test("an empty signature response is retried on the pc lane", () => {
     const url = new URL(request.url);
     if (url.pathname.startsWith("/service/2/device_register")) return { device_id: "555", install_id: "666" };
     if (url.searchParams.get("device_platform") !== "pc") return { status: 200, body: "", headers: {} };
-    return { code: 0, data: { video_model_data: { [videoId]: { video_model: model } } } };
+    return { code: 0, data: { [videoId]: { video_model: model } } };
   });
   const media = api.test.appMedia(videoId);
   assert.equal(media.url, "https://media.example.invalid/main.mp4");
-  const tabs = requests.filter((request) => request.url.includes("/video_tab/"));
-  assert(tabs.length >= 2);
-  assert.equal(new URL(tabs[tabs.length - 1].url).searchParams.get("device_platform"), "pc");
+  const lanes = requests.filter((request) => !request.url.includes("/service/2/device_register"));
+  assert(lanes.length >= 2);
+  assert.equal(new URL(lanes[lanes.length - 1].url).searchParams.get("device_platform"), "pc");
 });
 
 test("empty responses across lanes rotate the device before giving up", () => {
@@ -269,7 +355,7 @@ test("empty responses across lanes rotate the device before giving up", () => {
     const url = new URL(request.url);
     if (url.pathname.startsWith("/service/2/device_register")) return { device_id: "555", install_id: "666" };
     if (url.searchParams.get("device_id") === state.deviceId) return { status: 200, body: "", headers: {} };
-    return { code: 0, data: { video_model_data: { [videoId]: { video_model: model } } } };
+    return { code: 0, data: { [videoId]: { video_model: model } } };
   });
   const media = api.test.appMedia(videoId);
   assert.equal(media.url, "https://media.example.invalid/main.mp4");
