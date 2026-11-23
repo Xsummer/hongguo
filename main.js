@@ -1,19 +1,16 @@
 const siteBaseUrl = "https://hongguoduanju.com";
 const appBaseUrl = "https://api5-normal-sinfonlineb.fqnovel.com";
-const playbackBaseUrl = "https://api5-normal-sinfonlinea.fqnovel.com";
-const appVersionCode = "74532";
-const appVersionName = "7.4.5.32";
-const playbackUserAgent = "com.phoenix.read/" + appVersionCode + " (Linux; U; Android 12; zh_CN_#Hans; PGT-AN10; Build/V417IR;tt-ok/3.12.13.20)";
-const appUserAgent = "com.phoenix.read/" + appVersionCode + " (Linux; U; Android 16; zh_CN; 25053RT47C; Build/BP2A.250605.031.A3; Cronet/TTNetVersion:04657795 2026-01-23 QuicVersion:c67e9834 2025-09-08)";
+const appBaseUrlAlt = "https://api5-normal-sinfonlinea.fqnovel.com";
+const playbackBaseUrl = appBaseUrl;
+const playbackUserAgent = "com.phoenix.read/73932 (Linux; U; Android 16; zh_CN_#Hans; 25053RT47C; Build/BP2A.250605.031.A3; Cronet/TTNetVersion:04657795 2026-01-23 QuicVersion:c67e9834 2025-09-08)";
+const playbackMedusa = "WSQEa3FvS6EV";
+const appUserAgent = "com.phoenix.read/73532 (Linux; U; Android 16; zh_CN; 25053RT47C; Build/BP2A.250605.031.A3; Cronet/TTNetVersion:04657795 2026-01-23 QuicVersion:c67e9834 2025-09-08)";
 const webUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.6 Mobile/15E148 Safari/604.1";
+const webDesktopUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36";
 const deviceRegisterUrl = "https://log.snssdk.com/service/2/device_register/";
 const mediaReferer = "https://novel.snssdk.com/";
 const responseLimit = 20 * 1024 * 1024;
 const cencScheme = "hongguo-cenc://";
-const playUrlSalts = ["4dd4c2e6b83162090e52b3c7a6733ba41cb2462b829ab58a196b39db57177524f49baf7f08e8d68d26a72e37c1a95a2f1f05a51892aef2949732b62a38aadd58"];
-const playUrlHeaderSize = 4;
-const playUrlPattern = /^https?:\/\/\S+$/;
-const fallbackCodecTypes = ["1", "3"];
 const audioScheme = "hongguo-audio://";
 const bookPrefix = "book-";
 const legacySeriesPrefix = "hg-series-v1:";
@@ -28,6 +25,16 @@ const danmakuMaxDurationMs = 24 * 60 * minuteMs;
 const defaultMaxPages = 50;
 const deviceRotations = 3;
 const registerPauseMs = 10 * minuteMs;
+const webLockMs = 30 * minuteMs;
+const deviceRotateMs = 2 * minuteMs;
+const deviceRotateKey = "deviceRotated";
+const playUrlSalts = ["4dd4c2e6b83162090e52b3c7a6733ba41cb2462b829ab58a196b39db57177524f49baf7f08e8d68d26a72e37c1a95a2f1f05a51892aef2949732b62a38aadd58"];
+const playUrlHeaderSize = 4;
+const playUrlPattern = /^https?:\/\/\S+$/;
+const fallbackCodecTypes = ["1", "3"];
+const fallbackStreamTypes = ["encrypt", "plain"];
+const mediaCacheMs = 45 * minuteMs;
+const prefetchLimit = 15;
 const appRequestTimeoutMs = 20 * secondMs;
 const searchTimeoutMs = 40 * secondMs;
 const searchPageTimeoutMs = 12 * secondMs;
@@ -52,7 +59,9 @@ const tagPanelCategory = "5000";
 
 const paths = {
   videoDetail: "/novel/player/video_detail/v1/",
-  videoModel: "/novel/player/multi_video_model/player/v1",
+  videoModel: "/novel/player/multi_video_model/v1/",
+  videoModelPlayer: "/novel/player/multi_video_model/player/v1",
+  videoModelSingle: "/novel/player/video_model/v1/",
   videoTab: "/reading/bookapi/video_tab/multi_video_model/v1/",
   landpage: "/reading/distribution/category/landpage/v/",
   seriesPack: "/reading/distribution/book_pack_fields/inner_feed_detail/v1/",
@@ -66,6 +75,39 @@ const paths = {
   audioPlayInfo: "/reading/reader/audio/playinfo/",
   audioSearch: "/reading/bookapi/search/tab/v1/",
 };
+
+const webPlayback = {
+  fallback: "/api/video/protected/fallback-play-info",
+  playInfo: "/api/video/protected/play-info",
+  appId: "8662",
+};
+
+const appPlatforms = ["", "pc"];
+const playbackSigners = ["gorgon", "v5-stripped", "v5"];
+// 版本身份档位：服务器只校验"版本四元组自洽"，具体版本号可以换；某个档位被风控盯上时换档即可
+const playbackProfiles = [
+  { name: "default", userAgent: playbackUserAgent, fields: {} },
+  {
+    name: "vivo-74332",
+    userAgent: "com.phoenix.read/74332 (Linux; U; Android 12; zh_CN_#Hans; PGT-AN10; Build/V417IR;tt-ok/3.12.13.20)",
+    fields: {
+      version_code: "74332", version_name: "7.4.3.32", manifest_version_code: "74332", update_version_code: "74332",
+      channel: "vivo_8662_64", device_type: "PGT-AN10", device_brand: "vivo", os_api: "34", os_version: "12", pv_player: "74332",
+    },
+  },
+  {
+    name: "legacy-71332",
+    userAgent: "com.phoenix.read/71332 (Linux; U; Android 16; zh_CN_#Hans; 25053RT47C; Build/BP2A.250605.031.A3; Cronet/TTNetVersion:04657795 2026-01-23 QuicVersion:c67e9834 2025-09-08)",
+    fields: {
+      version_code: "71332", version_name: "7.1.3.32", manifest_version_code: "71332", update_version_code: "71332", pv_player: "71332",
+    },
+  },
+];
+const laneCooldownMs = 10 * minuteMs;
+const laneOkMs = 30 * minuteMs;
+const laneCooldownPrefix = "lane-cold:";
+const laneOkPrefix = "lane-ok:";
+const deviceRegisterAltUrl = "https://log.snssdk.com/service/2/device_register/?aid=8662&app_name=novelread";
 
 const genres = [
   { key: "short_play", scene: "default", name: "真人剧" },
@@ -672,7 +714,7 @@ function playerArgus(query, body, timestamp, deviceId, nonce) {
   bytesField(message, 4, host.utf8Encode("8662"));
   bytesField(message, 5, host.utf8Encode(deviceId));
   bytesField(message, 6, host.utf8Encode("1611921764"));
-  bytesField(message, 7, host.utf8Encode(appVersionName));
+  bytesField(message, 7, host.utf8Encode("7.3.5.32"));
   bytesField(message, 8, host.utf8Encode("v04.07.01-ml-android"));
   varintField(message, 9, 135135744);
   bytesField(message, 10, new Uint8Array(8));
@@ -1358,8 +1400,8 @@ function deviceOf(state, helper) {
 
 function appQuery(deviceId, installId) {
   return {
-    aid: "8662", app_name: "novelread", version_code: appVersionCode, version_name: appVersionName,
-    manifest_version_code: appVersionCode, update_version_code: appVersionCode, channel: "update_64",
+    aid: "8662", app_name: "novelread", version_code: "73532", version_name: "7.3.5.32",
+    manifest_version_code: "73532", update_version_code: "73532", channel: "update_64",
     device_platform: "android", os: "android", ssmix: "a", device_type: "25053RT47C",
     device_brand: "Redmi", language: "zh", os_api: "36", os_version: "16",
     resolution: "1280*2772", dpi: "520", ac: "wifi", device_id: deviceId, iid: installId,
@@ -1368,8 +1410,8 @@ function appQuery(deviceId, installId) {
 
 function registerDevice() {
   const header = {
-    display_name: "红果免费短剧", aid: 8662, app_version: appVersionName, version_code: Number(appVersionCode),
-    manifest_version_code: Number(appVersionCode), update_version_code: Number(appVersionCode), channel: "update_64", package: "com.phoenix.read",
+    display_name: "红果免费短剧", aid: 8662, app_version: "7.3.5.32", version_code: 73532,
+    manifest_version_code: 73532, update_version_code: 73532, channel: "update_64", package: "com.phoenix.read",
     app_language: "zh", os: "Android", os_version: "16", os_api: 36, device_model: "25053RT47C",
     device_brand: "Redmi", device_manufacturer: "Xiaomi", cpu_abi: "arm64-v8a", density_dpi: 520,
     display_density: "xxhdpi", resolution: "2772x1280", language: "zh", timezone: 8, access: "wifi",
@@ -1389,6 +1431,10 @@ function registerDevice() {
     limit: 64 * 1024, timeoutMs: appRequestTimeoutMs, followRedirects: true, anyStatus: true,
     headers: { "User-Agent": appUserAgent, Accept: "application/json", "Content-Type": "application/json; charset=utf-8" },
   });
+  return registrationDevice(response);
+}
+
+function registrationDevice(response) {
   if (response.status >= 500) {
     throw new Error("红果设备注册 HTTP " + response.status);
   }
@@ -1412,6 +1458,25 @@ function registerDevice() {
   return { deviceId, installId };
 }
 
+// 备用注册车道：精简 header + 极短 query，绕过主注册接口的 IP 级限流（444 Access Denied）
+function registerDeviceAlt() {
+  const header = {
+    aid: 8662, app_name: "novelread", package: "com.phoenix.read", app_version: "7.3.9.32",
+    version_code: 73932, update_version_code: 73932, manifest_version_code: 73932,
+    sdk_version: "6.18.0", device_platform: "android", os: "Android", os_version: "16", os_api: 36,
+    device_model: "25053RT47C", device_brand: "Redmi", device_manufacturer: "Xiaomi",
+    density_dpi: 520, display_density: "mdpi", resolution: "1280x2772", language: "zh",
+    timezone: 8, access: "wifi", channel: "update_64", cdid: uuidLike(), openudid: randomHex(8),
+  };
+  const body = JSON.stringify({ magic_tag: "ss_app_log", header, _gen_time: Date.now() });
+  const response = host.fetch({
+    method: "POST", url: deviceRegisterAltUrl, body,
+    limit: 64 * 1024, timeoutMs: appRequestTimeoutMs, followRedirects: true, anyStatus: true,
+    headers: { "User-Agent": appUserAgent, Accept: "application/json", "Content-Type": "application/json; charset=utf-8" },
+  });
+  return registrationDevice(response);
+}
+
 function ensureDevice(helper, rejected) {
   const settled = (state) => {
     const [current, , registered] = deviceOf(state, helper);
@@ -1433,10 +1498,14 @@ function ensureDevice(helper, rejected) {
     try {
       registered = registerDevice();
     } catch (error) {
-      if (error.rejection) {
-        host.cacheSet("registerPause", message(error), registerPauseMs);
+      try {
+        registered = registerDeviceAlt();
+      } catch (altError) {
+        if (altError.rejection) {
+          host.cacheSet("registerPause", message(altError), registerPauseMs);
+        }
+        throw altError.rejection ? altError : error;
       }
-      throw error;
     }
     if (helper) {
       state.helperDeviceId = registered.deviceId;
@@ -1448,6 +1517,7 @@ function ensureDevice(helper, rejected) {
       state.registered = true;
     }
     writeState(state);
+    laneClearCold();
   });
 }
 
@@ -1459,12 +1529,151 @@ function timeoutError() {
   return failure("红果请求超时", { timeout: true });
 }
 
-function playbackQuery(deviceId, installId) {
-  return {
-    aid: "8662", app_name: "novelread", version_code: appVersionCode, version_name: appVersionName,
-    channel: "vivo_8662_64", device_platform: "android", device_type: "PGT-AN10", os_version: "12",
-    update_version_code: appVersionCode, iid: installId, cdid: uuidLike(), device_id: deviceId,
+// 播放车道用的身份参数必须是自洽的一套版本四元组：version_code / version_name /
+// manifest_version_code / update_version_code 任一缺失或对不上，服务器都会静默返回空体。
+function playbackQuery(deviceId, installId, profile) {
+  const base = Object.assign(appQuery(deviceId, installId), {
+    version_code: "73932", version_name: "7.3.9.32",
+    manifest_version_code: "73932", update_version_code: "73932",
+    channel: "update_64", device_type: "25053RT47C", device_brand: "Redmi",
+    os_api: "36", os_version: "16", pv_player: "73932",
+    host_abi: "arm64-v8a", dragon_device_type: "phone",
+    compliance_status: "0", need_personal_recommend: "1",
+    player_so_load: "1", is_android_pad_screen: "0",
+  });
+  return Object.assign(base, profile && profile.fields ? profile.fields : {});
+}
+
+function playbackLaneList() {
+  return [
+    { name: "multi-main", base: appBaseUrl, path: paths.videoModel },
+    { name: "multi-alt", base: appBaseUrlAlt, path: paths.videoModel },
+    { name: "player-main", base: appBaseUrl, path: paths.videoModelPlayer },
+    { name: "single-main", base: appBaseUrl, path: paths.videoModelSingle },
+  ];
+}
+
+function laneKey(name, platform, profile) {
+  const lane = name + "@" + (platform ? platform : "default");
+  return profile && profile !== "default" ? lane + "#" + profile : lane;
+}
+
+// 记住上次成功的版本档位，下次先试它
+function orderedProfiles() {
+  const remembered = host.cacheGet("profile");
+  const list = playbackProfiles.slice();
+  const at = remembered === null ? -1 : list.findIndex((item) => item.name === remembered);
+  if (at > 0) {
+    const chosen = list.splice(at, 1)[0];
+    list.unshift(chosen);
+  }
+  return list;
+}
+
+function profileMark(name) {
+  host.cacheSet("profile", name, laneOkMs);
+}
+
+// 标记值 "0" 表示已清除；时间戳自己算超时，不依赖宿主缓存的 TTL 实现
+function laneStamp(key) {
+  const raw = host.cacheGet(key);
+  if (raw === null || raw === "0") {
+    return 0;
+  }
+  const at = Number(raw);
+  return Number.isFinite(at) ? at : 1;
+}
+
+function laneState(name) {
+  const coldAt = laneStamp(laneCooldownPrefix + name);
+  if (coldAt > 0 && Date.now() - coldAt < laneCooldownMs) {
+    return "cold";
+  }
+  const warmAt = laneStamp(laneOkPrefix + name);
+  if (warmAt > 0 && Date.now() - warmAt < laneOkMs) {
+    return "warm";
+  }
+  return "unknown";
+}
+
+function laneColdIndex() {
+  const raw = host.cacheGet("lane-cold-index");
+  if (raw === null) {
+    return [];
+  }
+  try {
+    const list = JSON.parse(raw);
+    return Array.isArray(list) ? list : [];
+  } catch (error) {
+    return [];
+  }
+}
+
+function laneMarkCold(name) {
+  host.cacheSet(laneOkPrefix + name, "0", 1);
+  host.cacheSet(laneCooldownPrefix + name, String(Date.now()), laneCooldownMs);
+  const list = laneColdIndex();
+  if (list.indexOf(name) < 0) {
+    list.push(name);
+    host.cacheSet("lane-cold-index", JSON.stringify(list), laneCooldownMs);
+  }
+}
+
+// 换到新设备身份后，之前按旧设备判冷的车道要重新给一次机会
+function laneClearCold() {
+  for (const name of laneColdIndex()) {
+    host.cacheSet(laneCooldownPrefix + name, "0", 1);
+  }
+  host.cacheSet("lane-cold-index", "[]", 1);
+}
+
+function laneMarkWarm(name) {
+  host.cacheSet(laneCooldownPrefix + name, "0", 1);
+  host.cacheSet(laneOkPrefix + name, String(Date.now()), laneOkMs);
+}
+
+function signerOrder(laneName) {
+  const remembered = host.cacheGet("signer:" + laneName);
+  const list = playbackSigners.slice();
+  const at = remembered === null ? -1 : list.indexOf(remembered);
+  if (at > 0) {
+    list.splice(at, 1);
+    list.unshift(remembered);
+  }
+  return list;
+}
+
+function signerMark(laneName, signer) {
+  host.cacheSet("signer:" + laneName, signer, laneOkMs);
+}
+
+function orderedPlaybackLanes() {
+  const rank = { warm: 0, unknown: 1, cold: 2 };
+  return stableSort(playbackLaneList(), (left, right) => rank[laneState(left.name)] < rank[laneState(right.name)]);
+}
+
+function signPlaybackHeaders(address, query, body, nowMs, signer, profile) {
+  const agent = profile && profile.userAgent ? profile.userAgent : playbackUserAgent;
+  if (signer === "v5" || signer === "v5-stripped") {
+    const prepared = signPlaybackV5(address, query, body === null ? null : host.utf8Encode(body), nowMs);
+    const headers = { "User-Agent": agent, Accept: "application/json; charset=utf-8,application/x-protobuf" };
+    Object.assign(headers, prepared.headers);
+    if (signer === "v5-stripped") {
+      // 实测 X-Helios 与长 X-Medusa 同时出现会被风控判空，降级时去掉 Helios
+      delete headers["X-Helios"];
+    }
+    return { url: prepared.url, headers };
+  }
+  const rawQuery = encodeQuery(query);
+  const headers = {
+    "User-Agent": agent,
+    Accept: "application/json; charset=utf-8,application/x-protobuf",
+    "X-Xs-From-Web": "0",
+    "Sdk-Version": "2",
+    "X-Medusa": playbackMedusa,
   };
+  Object.assign(headers, signPlayer(rawQuery, body, query.aid, query.device_id, nowMs, host.randomBytes(11)));
+  return { url: address + "?" + rawQuery, headers };
 }
 
 function appRequest(method, path, extra, payload, options) {
@@ -1472,9 +1681,13 @@ function appRequest(method, path, extra, payload, options) {
   const comment = options.comment === true;
   const helper = options.helper === true;
   const deadline = options.deadline;
-  const playback = path === paths.videoModel;
+  const laneSpec = options.playbackLane || (path === paths.videoModel ? playbackLaneList()[0] : null);
+  const playback = laneSpec !== null;
+  const signer = options.signer || playbackSigners[0];
+  const profile = options.profile || playbackProfiles[0];
   const signedV5 = playback || path === paths.videoTab;
   const signed = !comment && path !== paths.bookmallTab;
+  const noRotate = options.noRotate === true;
   let lane = "";
   let registerError = null;
   if (signed) {
@@ -1491,7 +1704,7 @@ function appRequest(method, path, extra, payload, options) {
     }
     lane = "hongguo-helper";
   }
-  const query = Object.assign(playback ? playbackQuery(deviceId, installId) : appQuery(deviceId, installId), extra || {});
+  const query = Object.assign(playback ? playbackQuery(deviceId, installId, profile) : appQuery(deviceId, installId), extra || {});
   const body = payload === null || payload === undefined ? null : typeof payload === "string" ? payload : JSON.stringify(payload);
   const attempts = Math.min(Math.max(host.retries(), 1), 3);
   let lastError = null;
@@ -1506,7 +1719,9 @@ function appRequest(method, path, extra, payload, options) {
     if (remainingMs(deadline) <= 0) {
       throw lastError || timeoutError();
     }
-    const address = (playback ? playbackBaseUrl : appBaseUrl) + path;
+    const address = laneSpec !== null
+      ? laneSpec.base + laneSpec.path
+      : (options.baseUrl || (playback ? playbackBaseUrl : appBaseUrl)) + path;
     const nonce = comment ? host.randomBytes(11) : null;
     let ticket;
     try {
@@ -1522,19 +1737,25 @@ function appRequest(method, path, extra, payload, options) {
     query._rticket = String(now);
     const rawQuery = encodeQuery(query);
     let requestUrl = address + "?" + rawQuery;
-    const headers = signedV5
-      ? { "User-Agent": playbackUserAgent, Accept: "application/json" }
-      : { "User-Agent": appUserAgent, Accept: "application/json", "X-XS-From-Web": "0", "Sdk-Version": "2" };
-    if (signedV5) {
+    let headers;
+    if (playback) {
+      const prepared = signPlaybackHeaders(address, query, body, now, signer, profile);
+      requestUrl = prepared.url;
+      headers = prepared.headers;
+    } else if (signedV5) {
+      headers = { "User-Agent": playbackUserAgent, Accept: "application/json" };
       const prepared = signPlaybackV5(address, query, body === null ? null : host.utf8Encode(body), now);
       requestUrl = prepared.url;
       Object.assign(headers, prepared.headers);
-    } else if (comment) {
-      headers["Comment-Source"] = "601";
-      headers["Server-Channel"] = "1000";
-      Object.assign(headers, signComment(rawQuery, query.aid, now, nonce));
-    } else if (signed) {
-      Object.assign(headers, signPlayer(rawQuery, body, query.aid, query.device_id, now, host.randomBytes(11)));
+    } else {
+      headers = { "User-Agent": appUserAgent, Accept: "application/json", "X-XS-From-Web": "0", "Sdk-Version": "2" };
+      if (comment) {
+        headers["Comment-Source"] = "601";
+        headers["Server-Channel"] = "1000";
+        Object.assign(headers, signComment(rawQuery, query.aid, now, nonce));
+      } else if (signed) {
+        Object.assign(headers, signPlayer(rawQuery, body, query.aid, query.device_id, now, host.randomBytes(11)));
+      }
     }
     if (body !== null) {
       headers["Content-Type"] = "application/json; charset=utf-8";
@@ -1564,8 +1785,10 @@ function appRequest(method, path, extra, payload, options) {
       continue;
     }
     if (response.body.length === 0) {
-      lastError = new Error("红果 App 接口未返回有效数据");
-      if (signed && rotations < deviceRotations) {
+      lastError = failure("红果 App 接口对本次设备签名返回空响应，风控未放行", { emptyBody: true });
+      lastError.lane = laneSpec === null ? "" : laneSpec.name;
+      lastError.signer = playback ? signer : "";
+      if (signed && !playback && !noRotate && rotations < deviceRotations) {
         try {
           ensureDevice(helper, deviceId);
           registerError = null;
@@ -1579,7 +1802,7 @@ function appRequest(method, path, extra, payload, options) {
         }
       }
       if (registerError !== null) {
-        lastError = new Error("红果 App 接口未返回有效数据（设备注册失败：" + message(registerError) + "）");
+        lastError = failure("红果 App 接口对本次设备签名返回空响应，风控未放行（设备注册失败：" + message(registerError) + "）", { emptyBody: true });
       }
       continue;
     }
@@ -1590,7 +1813,7 @@ function appRequest(method, path, extra, payload, options) {
       result = null;
     }
     if (!isRecord(result)) {
-      throw new Error("红果 App 接口返回格式异常");
+      throw failure("红果 App 接口返回格式异常", { emptyBody: true });
     }
     const code = firstNonEmpty(mapString(result, "code", "Code", "status_code"), mapString(nested(result, "BaseResp"), "StatusCode"));
     if (code !== "" && code !== "0") {
@@ -1598,7 +1821,7 @@ function appRequest(method, path, extra, payload, options) {
     }
     return result;
   }
-  throw lastError || new Error("红果 App 接口未返回有效数据");
+  throw lastError || new Error("红果 App 接口没有返回可用的播放数据");
 }
 
 function fetchSiteText(address, noCache) {
@@ -2264,110 +2487,348 @@ function resolveVideoMedia(task) {
   }
   let nativeError;
   try {
-    return appMedia(videoId);
+    return appMedia(videoId, seriesId);
   } catch (error) {
     nativeError = error;
+  }
+  if (cacheRead(webLockKey(videoId)) !== null) {
+    throw new Error("红果取流失败：" + message(nativeError) + "；网页车道该集刚被拒绝过，" + Math.round(webLockMs / minuteMs) + " 分钟内不再重试，稍后可重试本集");
   }
   try {
     return webMedia(seriesId, videoId);
   } catch (pageError) {
-    throw new Error("红果 App 取流失败：" + message(nativeError) + "；网页取流失败：" + message(pageError));
+    if (pageError.locked) {
+      cacheWrite(webLockKey(videoId), 1, webLockMs);
+    }
+    throw new Error("红果取流失败：" + message(nativeError) + "；网页取流失败：" + message(pageError));
   }
 }
 
-function appMedia(videoId) {
+function webLockKey(videoId) {
+  return "weblocked:" + videoId;
+}
+
+function mediaCacheKey(videoId) {
+  return "media:" + videoId;
+}
+
+function upcomingVideos(seriesId, videoId) {
+  if (!numericId(seriesId)) {
+    return [];
+  }
+  const detail = cacheRead("detail:" + seriesId);
+  if (!isRecord(detail) || !Array.isArray(detail.chapters)) {
+    return [];
+  }
+  const ids = [];
+  for (const chapter of detail.chapters) {
+    if (isRecord(chapter) && typeof chapter.videoUrl === "string") {
+      ids.push(chapter.videoUrl.slice(cencScheme.length));
+    }
+  }
+  const at = ids.indexOf(videoId);
+  const tail = at >= 0 ? ids.slice(at + 1) : ids;
+  const picked = [];
+  for (const id of tail) {
+    if (numericId(id) && picked.indexOf(id) < 0) {
+      picked.push(id);
+    }
+    if (picked.length >= prefetchLimit - 1) {
+      break;
+    }
+  }
+  return picked;
+}
+
+function appMedia(videoId, seriesId) {
   if (!numericId(videoId)) {
     throw new Error("红果视频 ID 无效");
   }
-  let lastError;
-  for (const helper of [false, true]) {
-    try {
-      return fetchAppMedia(videoId, helper);
-    } catch (error) {
-      if (!error.noCompatibleMedia) {
-        throw error;
+  const cached = cacheRead(mediaCacheKey(videoId));
+  if (isRecord(cached) && typeof cached.url === "string" && cached.url !== "") {
+    return cached;
+  }
+  const batch = upcomingVideos(seriesId, videoId);
+  const done = (media) => {
+    cacheWrite(mediaCacheKey(videoId), media, mediaCacheMs);
+    return media;
+  };
+  const skipped = [];
+  // 上次成功的版本档位排在最前：直接走能用的那条，别每次都从被判空的那套试起
+  const profiles = orderedProfiles();
+  const primary = profiles[0];
+  const run = (helper) => {
+    for (const platform of appPlatforms) {
+      try {
+        return done(fetchAppMedia(videoId, helper, platform, batch, primary));
+      } catch (error) {
+        if (!error.noCompatibleMedia && !error.emptyBody) {
+          throw error;
+        }
+        skipped.push(error);
       }
-      lastError = error;
+    }
+    return null;
+  };
+  const direct = run(false);
+  if (direct !== null) {
+    return direct;
+  }
+  if (!skipped.some((error) => error.emptyBody)) {
+    throw appMediaError(skipped);
+  }
+  // 版本档位轮换：换一套自洽的版本四元组（等于换客户端身份）比换设备便宜，先试它
+  for (const profile of profiles.slice(1)) {
+    try {
+      return done(fetchPlayerMedia(videoId, false, "", batch, profile, true));
+    } catch (error) {
+      skipped.push(error);
     }
   }
   const [rejected] = deviceOf(currentState(), true);
   try {
     ensureDevice(true, rejected);
-  } catch (rotateError) {
-    throw new Error(message(lastError) + "；更换辅助设备也没有成功：" + message(rotateError));
+    const rotated = run(true);
+    if (rotated !== null) {
+      return rotated;
+    }
+  } catch (error) {
+    skipped.push(error);
   }
-  return fetchAppMedia(videoId, true);
+  const [mainDevice] = deviceOf(currentState(), false);
+  if (mainDevice !== "" && cacheRead(deviceRotateKey) === null) {
+    cacheWrite(deviceRotateKey, 1, deviceRotateMs);
+    try {
+      ensureDevice(false, mainDevice);
+      const fresh = run(false);
+      if (fresh !== null) {
+        return fresh;
+      }
+    } catch (error) {
+      skipped.push(error);
+    }
+  }
+  throw appMediaError(skipped);
 }
 
-function fetchAppMedia(videoId, helper) {
-  let tabError;
+function appMediaError(skipped) {
+  const unsupported = skipped.some((error) => error && error.noCompatibleMedia);
+  const blocked = skipped.some((error) => error && error.emptyBody);
+  if (unsupported && blocked) {
+    throw failure("红果 App 两条取流车道都没成功：既有只给不兼容编码的分集，接口也在拦截本次设备", { noCompatibleMedia: true, emptyBody: true });
+  }
+  if (unsupported) {
+    throw failure("红果 App 未返回兼容的媒体：已跳过不支持的编码", { noCompatibleMedia: true });
+  }
+  throw failure("红果 App 接口对本次设备签名返回空响应，风控未放行，换设备与版本档位都没通过", { emptyBody: true });
+}
+
+function fetchAppMedia(videoId, helper, platform, batch, profile) {
+  let playerError = null;
   try {
-    return fetchTabMedia(videoId, helper);
+    return fetchPlayerMedia(videoId, helper, platform, batch, profile);
   } catch (error) {
-    if (error.noCompatibleMedia) {
-      throw error;
-    }
-    tabError = error;
+    // 播放器车道判空不代表列表车道也空：两条接口的索引与风控判定不同，必须各试一遍
+    playerError = error;
   }
   try {
-    return fetchPlayerMedia(videoId, helper);
+    return fetchTabMedia(videoId, helper, platform);
   } catch (error) {
-    if (error.noCompatibleMedia) {
-      throw error;
-    }
-    throw new Error(message(tabError) + "；播放器接口：" + message(error));
+    // 只有两条接口都判定"没有兼容编码"才是真的无解；其余情况（缺集、空体、单边不兼容）
+    // 都算软失败，交给上层换平台、换档位、换设备继续试
+    const unsupported = !!(playerError.noCompatibleMedia && error.noCompatibleMedia);
+    const merged = failure(message(playerError) + "；视频列表接口：" + message(error), {
+      emptyBody: !unsupported,
+      noCompatibleMedia: unsupported,
+    });
+    merged.playerError = playerError;
+    merged.tabError = error;
+    throw merged;
   }
 }
 
-function fetchTabMedia(videoId, helper) {
+function fetchTabMedia(videoId, helper, platform) {
   const query = {
     video_id: videoId, video_id_type: "0", device_level: "1", need_all_video_definition: "1", need_mp4_align: "0",
     use_os_player: "0", video_platform: "1024", source: "0", from_video_id: "",
   };
-  const result = appRequest("GET", paths.videoTab, query, null, { helper });
-  const root = nested(result, "data");
-  const data = nested(nested(root, "video_model_data"), videoId);
-  if (isEmptyRecord(data)) {
-    throw new Error("红果 App 未返回所请求的分集播放信息");
+  if (platform) {
+    query.device_platform = platform;
   }
-  return mediaFromModel(appVideoModel(data));
-}
-
-function fetchPlayerMedia(videoId, helper) {
-  const payload = {
-    biz_param: {
-      detail_page_version: 0, device_level: 1, disable_digg_stat: false, disable_video_relate_book: false,
-      need_all_video_definition: true, need_mp4_align: false, use_os_player: false, use_server_dns: false, video_platform: 1024,
-    },
-    mixed_video_id_map: { "1004": [videoId] }, dr_scene: "player",
-  };
-  const result = appRequest("POST", paths.videoModel, null, payload, { helper });
-  const entries = nested(result, "data");
-  const data = nested(isRecord(entries["1004"]) ? entries["1004"] : entries, videoId);
-  if (isEmptyRecord(data)) {
-    throw new Error("红果 App 未返回所请求的分集播放信息");
-  }
-  return mediaFromModel(appVideoModel(data));
-}
-
-function mediaFromModel(model) {
-  try {
-    return selectAppMedia(model);
-  } catch (error) {
-    if (!error.noCompatibleMedia) {
-      throw error;
+  const failures = [];
+  let blocked = null;
+  for (const laneSpec of [{ name: "tab-main", base: appBaseUrl }, { name: "tab-alt", base: appBaseUrlAlt }]) {
+    const key = laneKey(laneSpec.name, platform);
+    if (laneState(key) === "cold") {
+      continue;
     }
-    return fallbackMedia(model, error);
+    let result;
+    try {
+      // 列表车道只是兜底：一次不成就判冷，别在这里烧设备注册次数
+      result = appRequest("GET", paths.videoTab, query, null, { helper, baseUrl: laneSpec.base, noRotate: true });
+    } catch (error) {
+      if (error.emptyBody) {
+        laneMarkCold(key);
+        blocked = error;
+      }
+      failures.push(error);
+      continue;
+    }
+    laneMarkWarm(key);
+    const root = nested(result, "data");
+    const data = nested(nested(root, "video_model_data"), videoId);
+    if (isEmptyRecord(data)) {
+      // 本车道没有该集：交给上层换平台（android → pc）或换车道，别整单判死
+      laneMarkCold(key);
+      blocked = failure("红果视频列表车道没有该集", { emptyBody: true });
+      failures.push(blocked);
+      continue;
+    }
+    return mediaFromModel(appVideoModel(data));
+  }
+  throw blocked || failures[0] || new Error("红果视频列表车道不可用");
+}
+
+function fetchPlayerMedia(videoId, helper, platform, batch, profile, quick) {
+  const prof = profile || playbackProfiles[0];
+  const ids = [videoId];
+  for (const id of anyList(batch)) {
+    if (numericId(id) && ids.indexOf(id) < 0 && ids.length < prefetchLimit) {
+      ids.push(id);
+    }
+  }
+  // 两套请求体：默认档位与"高设备档位 + 无 dr_scene"，服务器不同版本的必填项不一致，两种都试
+  const payloads = [
+    {
+      biz_param: {
+        detail_page_version: 0, device_level: 1, disable_digg_stat: false, disable_video_relate_book: false,
+        need_all_video_definition: true, need_mp4_align: false, use_os_player: false, use_server_dns: false, video_platform: 1024,
+      },
+      mixed_video_id_map: { "1004": ids }, dr_scene: "player",
+    },
+    {
+      biz_param: {
+        detail_page_version: 0, device_level: 3, disable_digg_stat: false,
+        need_all_video_definition: true, need_mp4_align: false, use_os_player: false, use_server_dns: false, video_platform: 1024,
+      },
+      mixed_video_id_map: { "1004": ids },
+    },
+  ];
+  const extra = platform ? { device_platform: platform } : null;
+  const lanes = quick === true ? orderedPlaybackLanes().slice(0, 1) : orderedPlaybackLanes();
+  const bodies = quick === true ? payloads.slice(0, 1) : payloads;
+  const failures = [];
+  let blocked = null;
+  let missing = null;
+  for (const payload of bodies) {
+  let tried = 0;
+  let incompatible = 0;
+  for (const laneSpec of lanes) {
+    const key = laneKey(laneSpec.name, platform, prof.name);
+    if (laneState(key) === "cold") {
+      continue;
+    }
+    tried++;
+    let laneEmpty = null;
+    let laneResult = null;
+    let laneIncompatible = null;
+    for (const signer of quick === true ? signerOrder(key).slice(0, 1) : signerOrder(key)) {
+      let result;
+      try {
+        result = appRequest("POST", paths.videoModel, extra, payload, { helper, playbackLane: laneSpec, signer, profile: prof });
+      } catch (error) {
+        if (error.emptyBody) {
+          laneEmpty = error;
+          continue;
+        }
+        failures.push(error);
+        break;
+      }
+      laneMarkWarm(key);
+      signerMark(key, signer);
+      profileMark(prof.name);
+      laneResult = result;
+      break;
+    }
+    if (laneResult !== null) {
+      const entries = nested(laneResult, "data");
+      const root = isRecord(entries["1004"]) ? entries["1004"] : entries;
+      const data = nested(root, videoId);
+      if (isEmptyRecord(data)) {
+        missing = new Error("红果 App 未返回所请求的分集播放信息");
+        continue;
+      }
+      try {
+        const media = mediaFromModel(appVideoModel(data));
+        prefetchMedia(root, ids, videoId);
+        return media;
+      } catch (error) {
+        if (!error.noCompatibleMedia) {
+          throw error;
+        }
+        laneIncompatible = error;
+      }
+    }
+    if (laneIncompatible !== null) {
+      failures.push(laneIncompatible);
+      incompatible++;
+      continue;
+    }
+    if (laneEmpty !== null) {
+      laneMarkCold(key);
+      blocked = laneEmpty;
+    }
+  }
+  // 所有车道都只给不兼容编码时，换请求体也不会变，直接跳出
+  if (tried > 0 && incompatible === tried) {
+    break;
+  }
+  }
+  if (blocked !== null) {
+    throw blocked;
+  }
+  if (missing !== null) {
+    throw missing;
+  }
+  if (failures.length === 0) {
+    // 全是冷却中的车道：交给上层换版本档位/设备，别当成致命错误
+    throw failure("红果 App 播放车道都在冷却中", { emptyBody: true });
+  }
+  throw failures[0];
+}
+
+function prefetchMedia(root, ids, videoId) {
+  if (!isRecord(root)) {
+    return;
+  }
+  for (const id of ids) {
+    if (id === videoId || cacheRead(mediaCacheKey(id)) !== null) {
+      continue;
+    }
+    const entry = nested(root, id);
+    if (isEmptyRecord(entry)) {
+      continue;
+    }
+    try {
+      const media = selectAppMedia(appVideoModel(entry));
+      if (isRecord(media) && typeof media.url === "string" && media.url !== "") {
+        cacheWrite(mediaCacheKey(id), media, mediaCacheMs);
+      }
+    } catch (error) {
+      // 预取只做锦上添花，单集失败不影响当前播放
+    }
   }
 }
 
 function appVideoModel(data) {
   let model = isRecord(data.video_model) ? data.video_model : null;
   if (typeof data.video_model === "string" && data.video_model !== "") {
-    let encoded = data.video_model;
-    const decoded = decodeBase64Text(encoded);
-    if (decoded !== null && decoded !== "") {
-      encoded = decoded;
+    let encoded = data.video_model.trim();
+    if (encoded.charAt(0) !== "{" && encoded.charAt(0) !== "[") {
+      const decoded = decodeBase64Text(encoded);
+      if (decoded !== null && decoded !== "") {
+        encoded = decoded;
+      }
     }
     try {
       model = parseJson(encoded);
@@ -2396,7 +2857,7 @@ function selectAppMedia(model) {
   let unaddressed = 0;
   let choices = [];
   for (const variant of variants) {
-    const meta = nested(variant, "video_meta");
+    const meta = isRecord(variant.video_meta) ? variant.video_meta : variant;
     const codec = mapString(meta, "codec_type").toLowerCase();
     if (codec === "bytevc2" || mapString(variant, "gear_des_key").toLowerCase().includes("bytevc2")) {
       unsupported++;
@@ -2408,7 +2869,7 @@ function selectAppMedia(model) {
       continue;
     }
     const media = { referer: mediaReferer, durationMs };
-    const encryption = nested(variant, "encrypt_info");
+    const encryption = isRecord(variant.encrypt_info) ? variant.encrypt_info : variant;
     const spade = mapString(encryption, "spade_a");
     if (spade !== "" || encryption.encrypt === true || mapString(encryption, "encryption_method") === "cenc-aes-ctr") {
       try {
@@ -2454,6 +2915,17 @@ function selectAppMedia(model) {
     throw noMedia("已跳过不支持的编码");
   }
   throw noMedia("已跳过不支持的编码，其余线路没有播放地址");
+}
+
+function mediaFromModel(model) {
+  try {
+    return selectAppMedia(model);
+  } catch (error) {
+    if (!error.noCompatibleMedia) {
+      throw error;
+    }
+    return fallbackMedia(model, error);
+  }
 }
 
 function decodePlayUrl(encoded, seed) {
@@ -2561,11 +3033,16 @@ function fallbackVariants(data) {
   return variants;
 }
 
-function fetchFallbackPlay(endpoint, codecType) {
-  const pattern = /([?&])codec_type=[^&]*/;
-  const address = pattern.test(endpoint)
-    ? endpoint.replace(pattern, "$1codec_type=" + codecType)
-    : endpoint + (endpoint.includes("?") ? "&" : "?") + "codec_type=" + codecType;
+function fetchFallbackPlay(endpoint, codecType, streamType) {
+  const replaceParam = (address, name, value) => {
+    const pattern = new RegExp("([?&])" + name + "=[^&]*");
+    if (pattern.test(address)) {
+      return address.replace(pattern, "$1" + name + "=" + value);
+    }
+    return address + (address.includes("?") ? "&" : "?") + name + "=" + value;
+  };
+  let address = replaceParam(endpoint, "codec_type", codecType);
+  address = replaceParam(address, "stream_type", streamType);
   let response;
   try {
     response = host.fetch({
@@ -2598,38 +3075,95 @@ function fallbackMedia(model, original) {
     throw original;
   }
   let lastError = null;
-  for (const codecType of fallbackCodecTypes) {
-    try {
-      const data = fetchFallbackPlay(endpoint, codecType);
-      return selectAppMedia({ video_list: fallbackVariants(data), video_duration: mapString(data, "video_duration") });
-    } catch (error) {
-      if (!error.noCompatibleMedia) {
-        throw new Error(message(original) + "；备用线路：" + message(error));
+  for (const streamType of fallbackStreamTypes) {
+    for (const codecType of fallbackCodecTypes) {
+      try {
+        const data = fetchFallbackPlay(endpoint, codecType, streamType);
+        return selectAppMedia({ video_list: fallbackVariants(data), video_duration: mapString(data, "video_duration") });
+      } catch (error) {
+        if (!error.noCompatibleMedia && !error.unsupportedPlayUrl) {
+          throw new Error(message(original) + "；备用线路：" + message(error));
+        }
+        lastError = error;
       }
-      lastError = error;
     }
   }
   throw failure(message(original) + "；备用线路：" + message(lastError), { noCompatibleMedia: true });
 }
 
+function webPlaybackRequest(path, payload) {
+  const response = host.fetch({
+    method: "POST",
+    url: siteBaseUrl + path + "?aid=" + webPlayback.appId,
+    headers: {
+      "User-Agent": webDesktopUserAgent,
+      "Content-Type": "application/json",
+      Accept: "application/json, text/plain, */*",
+      Referer: siteBaseUrl + "/",
+      "X-Xs-From-Web": "1",
+    },
+    body: JSON.stringify(payload),
+    limit: 256 * 1024,
+    timeoutMs: appRequestTimeoutMs,
+    followRedirects: true,
+    anyStatus: true,
+  });
+  let result = null;
+  try {
+    result = parseJson(response.body);
+  } catch (error) {
+    result = null;
+  }
+  return { status: response.status, result: isRecord(result) ? result : null };
+}
+
+function webPlaybackError(status, result) {
+  const detail = firstNonEmpty(
+    mapString(nested(result, "base_resp"), "StatusMessage"),
+    mapString(result, "error"),
+    mapString(result, "message"),
+  );
+  const reason = detail === "" ? "HTTP " + status : truncate(detail, 40);
+  if (status === 403) {
+    const locked = new Error("红果网页只免费开放每部剧的前 5 集，该集需要登录或 App 授权（" + reason + "）");
+    locked.locked = true;
+    return locked;
+  }
+  if (status === 400) {
+    const rejected = new Error("红果网页播放接口没有为该集开放地址（" + reason + "）");
+    rejected.locked = true;
+    return rejected;
+  }
+  if (status === 0) {
+    return new Error("红果网页播放接口请求失败");
+  }
+  return new Error("红果网页播放接口请求失败（" + reason + "）");
+}
+
 function webMedia(seriesId, videoId) {
-  const body = fetchSiteText(siteBaseUrl + "/player/" + encodeURIComponent(seriesId) + "/" + encodeURIComponent(videoId));
-  const page = routerLoaderMap(parseRouterData(body), "player_", "player_page");
-  if (mapString(page, "vid") !== videoId || mapString(page, "series_id") !== seriesId) {
-    throw new Error("红果未返回所请求的剧集，可能仅允许网页试看；请在站点确认该集的访问权限");
-  }
-  const info = nested(page, "video_player_info");
-  const addresses = mediaAddresses(info);
-  if (addresses.length === 0) {
-    throw new Error("红果该集未提供公开播放地址，可能需要登录或 App 授权；不会将试看集冒充该集下载");
-  }
-  const duration = parseNumber(mapString(info, "duration"));
-  const durationMs = Number.isFinite(duration) ? Math.trunc(duration * secondMs) : 0;
   const referer = siteBaseUrl + "/";
-  return {
-    url: addresses[0], referer, durationMs,
-    variants: addresses.map((address) => ({ url: address, referer, durationMs })),
-  };
+  const fallback = webPlaybackRequest(webPlayback.fallback, { item_id: videoId });
+  if (fallback.status === 200) {
+    const addresses = mediaAddresses(fallback.result);
+    if (addresses.length > 0) {
+      return {
+        url: addresses[0], referer, durationMs: 0,
+        variants: addresses.map((address) => ({ url: address, referer, durationMs: 0 })),
+      };
+    }
+  }
+  if (fallback.status === 400 || fallback.status === 403) {
+    throw webPlaybackError(fallback.status, fallback.result);
+  }
+  const protectedPlayback = webPlaybackRequest(webPlayback.playInfo, { item_id: videoId, series_id: seriesId });
+  const protectedInfo = nested(protectedPlayback.result, "play_info");
+  if (protectedPlayback.status === 200 && isRecord(protectedInfo)) {
+    throw new Error("红果该集只给出加密的 720p 播放流，没有可直接下载的地址");
+  }
+  if (protectedPlayback.status === 403) {
+    throw webPlaybackError(403, protectedPlayback.result);
+  }
+  throw webPlaybackError(fallback.status, fallback.result);
 }
 
 function fetchSuggestionRecords(query, count, deadline) {
