@@ -21,11 +21,8 @@ const secondMs = 1000;
 const minuteMs = 60 * secondMs;
 const danmakuMaxDurationMs = 24 * 60 * minuteMs;
 const defaultMaxPages = 50;
-const deviceRotations = 3;
 const registerPauseMs = 10 * minuteMs;
 const webLockMs = 30 * minuteMs;
-const deviceRotateMs = 2 * minuteMs;
-const deviceRotateKey = "deviceRotated";
 const playUrlSalts = ["4dd4c2e6b83162090e52b3c7a6733ba41cb2462b829ab58a196b39db57177524f49baf7f08e8d68d26a72e37c1a95a2f1f05a51892aef2949732b62a38aadd58"];
 const playUrlHeaderSize = 4;
 const playUrlPattern = /^https?:\/\/\S+$/;
@@ -33,6 +30,8 @@ const fallbackCodecTypes = ["1", "3"];
 const fallbackStreamTypes = ["encrypt", "plain"];
 const mediaCacheMs = 45 * minuteMs;
 const prefetchLimit = 15;
+const playerBlockMs = 30 * minuteMs;
+const playerBlockKey = "playerBlocked";
 const appRequestTimeoutMs = 20 * secondMs;
 const searchTimeoutMs = 40 * secondMs;
 const searchPageTimeoutMs = 12 * secondMs;
@@ -1375,8 +1374,15 @@ function appQuery(deviceId, installId) {
     manifest_version_code: "73532", update_version_code: "73532", channel: "update_64",
     device_platform: "android", os: "android", ssmix: "a", device_type: "25053RT47C",
     device_brand: "Redmi", language: "zh", os_api: "36", os_version: "16",
-    resolution: "1280*2772", dpi: "520", ac: "wifi", device_id: deviceId, iid: installId,
+    resolution: "1280*2772", dpi: "520", ac: "wifi", device_id: deviceId, iid: installId, cdid: deviceCdid(deviceId),
   };
+}
+
+// cdid 是设备级稳定标识，逐请求重随机是明确的风控特征。这里由设备号派生，
+// 保证同一设备永远给同一个 UUID 形态的 cdid。
+function deviceCdid(deviceId) {
+  const digest = host.hexEncode(host.md5(host.utf8Encode("hongguo-cdid:" + deviceId)));
+  return digest.slice(0, 8) + "-" + digest.slice(8, 12) + "-4" + digest.slice(13, 16) + "-a" + digest.slice(17, 20) + "-" + digest.slice(20, 32);
 }
 
 function registerDevice() {
@@ -1412,7 +1418,7 @@ function registerDevice() {
     result = undefined;
   }
   if (result === undefined) {
-    throw new Error("红果设备注册收到的不是接口数据（HTTP " + response.status + "）");
+    throw failure("红果设备注册收到的不是接口数据（HTTP " + response.status + "）", { rejection: true });
   }
   if (response.status !== 200) {
     throw failure("红果设备注册 HTTP " + response.status, { rejection: true });
@@ -1476,7 +1482,7 @@ function playbackQuery(deviceId, installId) {
   return {
     aid: "8662", app_name: "novelread", version_code: "74332", version_name: "7.4.3.32",
     channel: "vivo_8662_64", device_platform: "android", device_type: "PGT-AN10", os_version: "12",
-    update_version_code: "74332", iid: installId, cdid: uuidLike(), device_id: deviceId,
+    update_version_code: "74332", iid: installId, cdid: deviceCdid(deviceId), device_id: deviceId,
   };
 }
 
@@ -1489,12 +1495,11 @@ function appRequest(method, path, extra, payload, options) {
   const signedV5 = playback || path === paths.videoTab;
   const signed = !comment && path !== paths.bookmallTab;
   let lane = "";
-  let registerError = null;
   if (signed) {
     try {
       ensureDevice(helper, "");
     } catch (error) {
-      registerError = error;
+      // 首次注册失败仍然继续：下面会用已有设备号尝试一次，失败再抛真实原因。
     }
   }
   let [deviceId, installId] = deviceOf(currentState(), helper);
@@ -1508,7 +1513,6 @@ function appRequest(method, path, extra, payload, options) {
   const body = payload === null || payload === undefined ? null : typeof payload === "string" ? payload : JSON.stringify(payload);
   const attempts = Math.min(Math.max(host.retries(), 1), 3);
   let lastError = null;
-  let rotations = 0;
   for (let attempt = 0; attempt < attempts; attempt++) {
     if (attempt > 0) {
       if (remainingMs(deadline) <= attempt * secondMs) {
@@ -1577,23 +1581,10 @@ function appRequest(method, path, extra, payload, options) {
       continue;
     }
     if (response.body.length === 0) {
-      lastError = failure("红果 App 接口对本次设备签名返回空响应，风控未放行", { emptyBody: true });
-      if (signed && rotations < deviceRotations) {
-        try {
-          ensureDevice(helper, deviceId);
-          registerError = null;
-          rotations++;
-          [deviceId, installId] = deviceOf(currentState(), helper);
-          query.device_id = deviceId;
-          query.iid = installId;
-          attempt--;
-        } catch (error) {
-          registerError = error;
-        }
-      }
-      if (registerError !== null) {
-        lastError = failure("红果 App 接口对本次设备签名返回空响应，风控未放行（设备注册失败：" + message(registerError) + "）", { emptyBody: true });
-      }
+      // 空响应是服务端对该接口/凭据组合的软拒绝：换设备、原地重打都不会改变结果，
+      // 旧实现在这里重注册设备并执行 attempt--，一次播放能放大成 10+ 次取流 + 5+ 次注册，
+      // 把 log.snssdk.com 打成 444，反而拖垮整个模块的信誉。
+      lastError = failure("红果 App 接口对本次设备签名返回空响应", { emptyBody: true });
       continue;
     }
     let result;
@@ -2339,51 +2330,19 @@ function appMedia(videoId, seriesId) {
     return cached;
   }
   const batch = upcomingVideos(seriesId, videoId);
-  const done = (media) => {
-    cacheWrite(mediaCacheKey(videoId), media, mediaCacheMs);
-    return media;
-  };
   const skipped = [];
-  const run = (helper) => {
-    for (const platform of appPlatforms) {
-      try {
-        return done(fetchAppMedia(videoId, helper, platform, batch));
-      } catch (error) {
-        if (!error.noCompatibleMedia && !error.emptyBody) {
-          throw error;
-        }
-        skipped.push(error);
-      }
-    }
-    return null;
-  };
-  const direct = run(false);
-  if (direct !== null) {
-    return direct;
-  }
-  if (!skipped.some((error) => error.emptyBody)) {
-    throw appMediaError(skipped);
-  }
-  const [rejected] = deviceOf(currentState(), true);
-  try {
-    ensureDevice(true, rejected);
-    const rotated = run(true);
-    if (rotated !== null) {
-      return rotated;
-    }
-  } catch (error) {
-    skipped.push(error);
-  }
-  const [mainDevice] = deviceOf(currentState(), false);
-  if (mainDevice !== "" && cacheRead(deviceRotateKey) === null) {
-    cacheWrite(deviceRotateKey, 1, deviceRotateMs);
+  // 只保留两条平台车道，不再做设备轮换：
+  // 实测表明空响应与设备无关（新注册设备同样空），换设备只是白白消耗 device_register 配额，
+  // 一旦被 444 限流还会连累同一模块的剧集/详情接口。
+  for (const platform of appPlatforms) {
     try {
-      ensureDevice(false, mainDevice);
-      const fresh = run(false);
-      if (fresh !== null) {
-        return fresh;
-      }
+      const media = fetchAppMedia(videoId, false, platform, batch);
+      cacheWrite(mediaCacheKey(videoId), media, mediaCacheMs);
+      return media;
     } catch (error) {
+      if (!error.noCompatibleMedia && !error.emptyBody) {
+        throw error;
+      }
       skipped.push(error);
     }
   }
@@ -2394,32 +2353,51 @@ function appMediaError(skipped) {
   const unsupported = skipped.some((error) => error && error.noCompatibleMedia);
   const blocked = skipped.some((error) => error && error.emptyBody);
   if (unsupported && blocked) {
-    throw failure("红果 App 两条取流车道都没成功：既有只给不兼容编码的分集，接口也在拦截本次设备", { noCompatibleMedia: true, emptyBody: true });
+    throw failure("红果 App 两条取流车道都没成功：既有只给不兼容编码的分集，播放器接口也返回空响应", { noCompatibleMedia: true, emptyBody: true });
   }
   if (unsupported) {
     throw failure("红果 App 未返回兼容的媒体：已跳过不支持的编码", { noCompatibleMedia: true });
   }
-  throw failure("红果 App 接口对本次设备签名返回空响应，风控未放行，换设备重试也没通过", { emptyBody: true });
+  throw failure("红果 App 播放器接口对本次设备返回空响应，该车道暂不可用", { emptyBody: true });
 }
 
 function fetchAppMedia(videoId, helper, platform, batch) {
-  let playerError;
-  try {
-    return fetchPlayerMedia(videoId, helper, platform, batch);
-  } catch (error) {
-    if (error.noCompatibleMedia || error.emptyBody) {
-      throw error;
-    }
-    playerError = error;
-  }
+  // 车道优先级：video_tab 是单集 GET、风控最宽松；player 批量接口对本套凭据长期返回
+  // 200+空体，只能当兜底，不能当首选（1.1.0 把顺序反过来，直接造成大面积取流失败）。
+  let tabError;
   try {
     return fetchTabMedia(videoId, helper, platform);
   } catch (error) {
-    if (error.noCompatibleMedia || error.emptyBody) {
+    if (error.noCompatibleMedia) {
       throw error;
     }
-    throw new Error(message(playerError) + "；视频列表接口：" + message(error));
+    tabError = error;
   }
+  if (cacheRead(playerBlockKey) !== null) {
+    throw mergeLaneErrors(tabError, new Error("播放器接口近期持续返回空响应，已临时跳过"));
+  }
+  try {
+    return fetchPlayerMedia(videoId, helper, platform, batch);
+  } catch (error) {
+    if (error.noCompatibleMedia) {
+      throw error;
+    }
+    if (error.emptyBody) {
+      cacheWrite(playerBlockKey, 1, playerBlockMs);
+    }
+    throw mergeLaneErrors(tabError, error);
+  }
+}
+
+function mergeLaneErrors(tabError, playerError) {
+  const merged = new Error(message(tabError) + "；播放器接口：" + message(playerError));
+  if ((tabError && tabError.emptyBody) || (playerError && playerError.emptyBody)) {
+    merged.emptyBody = true;
+  }
+  if (tabError && tabError.noCompatibleMedia) {
+    merged.noCompatibleMedia = true;
+  }
+  return merged;
 }
 
 function fetchTabMedia(videoId, helper, platform) {
@@ -2434,7 +2412,9 @@ function fetchTabMedia(videoId, helper, platform) {
   const root = nested(result, "data");
   const data = nested(nested(root, "video_model_data"), videoId);
   if (isEmptyRecord(data)) {
-    throw new Error("红果 App 未返回所请求的分集播放信息");
+    // 当前平台车道拿不到这一集：标 emptyBody 让上层继续换车道（android→pc），
+    // 而不是把整个播放请求判死。
+    throw failure("红果 App 视频列表接口未返回所请求的分集", { emptyBody: true });
   }
   return mediaFromModel(appVideoModel(data));
 }

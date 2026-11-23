@@ -62,7 +62,7 @@ function load(response) {
     fetchText: () => { throw new Error("Offline test: webpage fallback"); },
   };
   const context = vm.createContext({ host, module: { exports: {} } });
-  vm.runInContext(source + "\nmodule.exports.test = { appMedia, appDetail, fetchAppMedia, fetchTabMedia, fetchPlayerMedia, selectAppMedia, appRequest, paths, webMedia, webPlayback, webDesktopUserAgent, resolveVideoMedia, cencScheme };", context);
+  vm.runInContext(source + "\nmodule.exports.test = { appMedia, appDetail, fetchAppMedia, fetchTabMedia, fetchPlayerMedia, selectAppMedia, appRequest, paths, webMedia, webPlayback, webDesktopUserAgent, resolveVideoMedia, cencScheme, ensureDevice };", context);
   context.module.exports.restoreCatalogState(state);
   return { api: context.module.exports, requests, context, host };
 }
@@ -96,29 +96,30 @@ for (const nested of [false, true]) {
 }
 
 test("playback prefers the signed player request", () => {
-  const { api, requests } = load({ code: 0, data: { [videoId]: { video_model: JSON.stringify(model) } } });
+  const { api, requests } = load({ code: 0, data: { video_model_data: { [videoId]: { video_model: model } } } });
   const media = api.test.fetchAppMedia(videoId, false);
   assert.equal(media.url, "https://media.example.invalid/main.mp4");
   assert.equal(media.variants.length, 2);
   assert.equal(requests.length, 1);
   const request = requests[0];
   const url = new URL(request.url);
-  assert.equal(request.method, "POST");
-  assert.equal(url.hostname, "api5-normal-sinfonlinea.fqnovel.com");
-  assert.equal(url.pathname, "/novel/player/multi_video_model/player/v1");
+  assert.equal(request.method, "GET");
+  assert.equal(url.hostname, "api5-normal-sinfonlineb.fqnovel.com");
+  assert.equal(url.pathname, "/reading/bookapi/video_tab/multi_video_model/v1/");
+  assert.equal(url.searchParams.get("video_id"), videoId);
   assert.equal(request.headers["X-Gorgon"], undefined);
-  assert.equal(request.headers["X-SS-STUB"], crypto.createHash("md5").update(request.body).digest("hex").toUpperCase());
+  assert(request.headers["X-Medusa"] && request.headers["X-Helios"]);
 });
 
 test("the video tab is used when the player request has no episode", () => {
   const { api, requests } = load((request) => (request.url.includes("/video_tab/")
-    ? { code: 0, data: { video_model_data: { [videoId]: { video_model: model } } } }
-    : { code: 0, data: { "7700000000000000002": { video_model: model } } }));
+    ? { code: 0, data: { video_model_data: { "7700000000000000002": { video_model: model } } } }
+    : { code: 0, data: { [videoId]: { video_model: model } } }));
   const media = api.test.fetchAppMedia(videoId, false);
   assert.equal(media.url, "https://media.example.invalid/main.mp4");
   assert.equal(requests.length, 2);
-  assert.equal(new URL(requests[0].url).pathname, "/novel/player/multi_video_model/player/v1");
-  assert.equal(new URL(requests[1].url).pathname, "/reading/bookapi/video_tab/multi_video_model/v1/");
+  assert.equal(new URL(requests[0].url).pathname, "/reading/bookapi/video_tab/multi_video_model/v1/");
+  assert.equal(new URL(requests[1].url).pathname, "/novel/player/multi_video_model/player/v1");
 });
 
 test("missing requested episode cannot use another episode", () => {
@@ -159,42 +160,32 @@ test("incompatible codecs are retried on the pc lane", () => {
   ] };
   const { api, requests } = load((request) => {
     const url = new URL(request.url);
-    if (url.searchParams.get("device_platform") !== "pc") return { code: 0, data: { [videoId]: { video_model: vvc } } };
-    return { code: 0, data: { [videoId]: { video_model: { video_duration: 58.167, video_list: [
+    if (url.searchParams.get("device_platform") !== "pc") return { code: 0, data: { video_model_data: { [videoId]: { video_model: vvc } } } };
+    return { code: 0, data: { video_model_data: { [videoId]: { video_model: { video_duration: 58.167, video_list: [
       { main_url: "https://media.example.invalid/pc720.mp4", definition: "720p", codec_type: "bytevc1", vwidth: 720, vheight: 1280 },
-    ] } } } };
+    ] } } } } };
   });
   const media = api.test.appMedia(videoId);
   assert.equal(media.url, "https://media.example.invalid/pc720.mp4");
   assert.equal(media.quality, 720);
   const lanes = requests.map((request) => (new URL(request.url).searchParams.get("device_platform") || "default"));
   assert.deepEqual(lanes, ["android", "pc"]);
-  assert.equal(new URL(requests[0].url).pathname, "/novel/player/multi_video_model/player/v1");
-  assert.equal(new URL(requests[1].url).pathname, "/novel/player/multi_video_model/player/v1");
+  assert.equal(new URL(requests[0].url).pathname, "/reading/bookapi/video_tab/multi_video_model/v1/");
+  assert.equal(new URL(requests[1].url).pathname, "/reading/bookapi/video_tab/multi_video_model/v1/");
   assert.equal(new URL(requests[1].url).searchParams.get("device_id"), state.deviceId);
 });
 
 test("the pc lane still falls back to the video tab when the player request fails", () => {
-  const vvc = { video_duration: 58.167, video_list: [
-    { main_url: "https://media.example.invalid/vvc.mp4", video_meta: { codec_type: "bytevc2", definition: "720p" }, gear_des_key: "1:encrypt|2:bytevc2|4:720p" },
-  ] };
-  const { api, requests } = load((request) => {
-    const url = new URL(request.url);
-    if (url.pathname === "/novel/player/multi_video_model/player/v1") return { code: 0, data: { "7700000000000000002": { video_model: vvc } } };
-    if (url.searchParams.get("device_platform") !== "pc") return { code: 0, data: { video_model_data: { [videoId]: { video_model: vvc } } } };
-    return { code: 0, data: { video_model_data: { [videoId]: { video_model: { video_duration: 58.167, video_list: [
-      { main_url: "https://media.example.invalid/pctab720.mp4", definition: "720p", codec_type: "bytevc1", vwidth: 720, vheight: 1280 },
-    ] } } } } };
-  });
-  const media = api.test.appMedia(videoId);
-  assert.equal(media.url, "https://media.example.invalid/pctab720.mp4");
-  const paths = requests.map((request) => new URL(request.url).pathname);
-  assert.deepEqual(paths, [
-    "/novel/player/multi_video_model/player/v1",
-    "/reading/bookapi/video_tab/multi_video_model/v1/",
-    "/novel/player/multi_video_model/player/v1",
-    "/reading/bookapi/video_tab/multi_video_model/v1/",
-  ]);
+  // 空响应是 player 车道的常态软拒绝，必须能继续走到 video_tab，
+  // 否则整条取流链路会被一次空响应短路（1.1.0 的真实故障点）。
+  const { api, requests } = load((request) => (request.url.includes("/video_tab/")
+    ? { status: 200, body: "", headers: {} }
+    : { code: 0, data: { [videoId]: { video_model: model } } }));
+  const media = api.test.fetchAppMedia(videoId, false);
+  assert.equal(media.url, "https://media.example.invalid/main.mp4");
+  assert.equal(requests.length, 2);
+  assert.equal(new URL(requests[0].url).pathname, "/reading/bookapi/video_tab/multi_video_model/v1/");
+  assert.equal(new URL(requests[1].url).pathname, "/novel/player/multi_video_model/player/v1");
 });
 
 test("a resolved episode is served from the media cache without a second request", () => {
@@ -337,38 +328,49 @@ test("the plain master is only used when no ladder is offered", () => {
 });
 
 test("an empty signature response is retried on the pc lane", () => {
+  // 空响应与设备无关（实测：新注册设备的 player 车道同样返回 200+空体），
+  // 因此这里绝不能再去打 device_register：那只会把自己打成 444。
+  let registrations = 0;
   const { api, requests } = load((request) => {
     const url = new URL(request.url);
-    if (url.pathname.startsWith("/service/2/device_register")) return { device_id: "555", install_id: "666" };
-    if (url.searchParams.get("device_platform") !== "pc") return { status: 200, body: "", headers: {} };
-    return { code: 0, data: { [videoId]: { video_model: model } } };
+    if (url.pathname.startsWith("/service/2/device_register")) {
+      registrations++;
+      return { device_id: "555", install_id: "666" };
+    }
+    return { status: 200, body: "", headers: {} };
   });
-  const media = api.test.appMedia(videoId);
-  assert.equal(media.url, "https://media.example.invalid/main.mp4");
-  const lanes = requests.filter((request) => !request.url.includes("/service/2/device_register"));
-  assert(lanes.length >= 2);
-  assert.equal(new URL(lanes[lanes.length - 1].url).searchParams.get("device_platform"), "pc");
+  assert.throws(() => api.test.appMedia(videoId), /空响应/);
+  assert.equal(registrations, 0);
+  const lanes = requests.map((request) => new URL(request.url).pathname);
+  assert.deepEqual(lanes, [
+    "/reading/bookapi/video_tab/multi_video_model/v1/",
+    "/novel/player/multi_video_model/player/v1",
+    "/reading/bookapi/video_tab/multi_video_model/v1/",
+  ]);
 });
 
 test("empty responses across lanes rotate the device before giving up", () => {
+  let registrations = 0;
   const { api, requests } = load((request) => {
     const url = new URL(request.url);
-    if (url.pathname.startsWith("/service/2/device_register")) return { device_id: "555", install_id: "666" };
-    if (url.searchParams.get("device_id") === state.deviceId) return { status: 200, body: "", headers: {} };
-    return { code: 0, data: { [videoId]: { video_model: model } } };
+    if (url.pathname.startsWith("/service/2/device_register")) {
+      registrations++;
+      return { device_id: "555", install_id: "666" };
+    }
+    if (url.pathname === "/novel/player/multi_video_model/player/v1") return { status: 200, body: "", headers: {} };
+    return { code: 0, data: { video_model_data: {} } };
   });
-  const media = api.test.appMedia(videoId);
-  assert.equal(media.url, "https://media.example.invalid/main.mp4");
-  assert(requests.some((request) => request.url.includes("/service/2/device_register")));
+  const players = () => requests.filter((request) => request.url.includes("/multi_video_model/player/")).length;
+  assert.throws(() => api.test.appMedia(videoId), /空响应/);
+  assert.equal(registrations, 0);
+  const blockedAt = players();
+  assert.throws(() => api.test.appMedia("7700000000000000003"), /空响应/);
+  assert.equal(players(), blockedAt);
 });
 
 test("an all-empty rotation reports the signature block", () => {
-  const { api } = load((request) => {
-    const url = new URL(request.url);
-    if (url.pathname.startsWith("/service/2/device_register")) return { device_id: "555", install_id: "666" };
-    return { status: 200, body: "", headers: {} };
-  });
-  assert.throws(() => api.test.appMedia(videoId), /风控未放行/);
+  const { api } = load({ status: 200, body: "", headers: {} });
+  assert.throws(() => api.test.appMedia(videoId), /播放器接口对本次设备返回空响应/);
 });
 
 test("catalog and detail keep the previous signing and endpoint", () => {
@@ -475,4 +477,22 @@ test("v5 digest and carrier match independent synthetic vectors", () => {
     for (const [key, value] of Object.entries(values)) assert.equal(url.searchParams.get(key), value);
   }
   assert.equal(JSON.stringify(values), before);
+});
+
+test("the playback cdid is stable for one device", () => {
+  const { api, requests } = load({ code: 0, data: { video_model_data: { [videoId]: { video_model: model } } } });
+  api.test.fetchTabMedia(videoId, false);
+  api.test.fetchTabMedia(videoId, false);
+  const cdids = new Set(requests.map((request) => new URL(request.url).searchParams.get("cdid")));
+  assert.equal(cdids.size, 1);
+  assert.match([...cdids][0], /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-a[0-9a-f]{3}-[0-9a-f]{12}$/);
+});
+
+test("a rejected device registration is remembered as a pause", () => {
+  const { api, host } = load((request) => {
+    if (request.url.includes("/service/2/device_register")) return { status: 444, body: "<html>Access Denied</html>", headers: {} };
+    return { code: 0, data: { video_model_data: { [videoId]: { video_model: model } } } };
+  });
+  assert.throws(() => api.test.ensureDevice(false, state.deviceId), /注册/);
+  assert(host.cacheGet("registerPause") !== null);
 });
