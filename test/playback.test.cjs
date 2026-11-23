@@ -173,12 +173,14 @@ test("incompatible codecs are retried on the pc lane", () => {
   const media = api.test.appMedia(videoId);
   assert.equal(media.url, "https://media.example.invalid/pc720.mp4");
   assert.equal(media.quality, 720);
-  const lanes = requests.map((request) => (new URL(request.url).searchParams.get("device_platform") || "default"));
-  assert.equal(lanes[lanes.length - 1], "pc");
-  assert(lanes.slice(0, -1).every((lane) => lane === "android"));
   const modelPaths = ["/novel/player/multi_video_model/v1/", "/novel/player/multi_video_model/player/v1", "/novel/player/video_model/v1/"];
-  assert(requests.every((request) => modelPaths.includes(new URL(request.url).pathname)));
-  assert.equal(new URL(requests[requests.length - 1].url).searchParams.get("device_id"), state.deviceId);
+  const tabPath = "/reading/bookapi/video_tab/multi_video_model/v1/";
+  assert(requests.every((request) => [...modelPaths, tabPath].includes(new URL(request.url).pathname)));
+  const playerRequests = requests.filter((request) => modelPaths.includes(new URL(request.url).pathname));
+  const lanes = playerRequests.map((request) => (new URL(request.url).searchParams.get("device_platform") || "default"));
+  assert.equal(lanes[lanes.length - 1], "pc");
+  assert(lanes.slice(0, -1).some((lane) => lane === "android"));
+  assert.equal(new URL(playerRequests[playerRequests.length - 1].url).searchParams.get("device_id"), state.deviceId);
 });
 
 test("the pc lane still falls back to the video tab when the player request fails", () => {
@@ -461,7 +463,12 @@ test("locked webpage episodes fail through the app api and stay locked", () => {
   const before = requests.length;
   assert.throws(() => api.test.resolveVideoMedia(task), /不再重试/);
   assert.equal(requests.filter((request) => request.url.includes("hongguoduanju.com/api/")).length, 1);
-  assert(requests.length > before);
+  // 冷却中的车道直接跳过：第二次取流不会再碰任何播放或列表接口
+  const laneHits = requests.slice(before).filter((request) => {
+    const pathname = new URL(request.url).pathname;
+    return pathname.includes("/novel/player/") || pathname.includes("video_tab");
+  });
+  assert.equal(laneHits.length, 0);
 });
 
 test("v5 digest and carrier match independent synthetic vectors", () => {

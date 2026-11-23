@@ -2624,22 +2624,26 @@ function appMediaError(skipped) {
 }
 
 function fetchAppMedia(videoId, helper, platform, batch, profile) {
-  let playerError;
+  let playerError = null;
   try {
     return fetchPlayerMedia(videoId, helper, platform, batch, profile);
   } catch (error) {
-    if (error.noCompatibleMedia || error.emptyBody) {
-      throw error;
-    }
+    // 播放器车道判空不代表列表车道也空：两条接口的索引与风控判定不同，必须各试一遍
     playerError = error;
   }
   try {
     return fetchTabMedia(videoId, helper, platform);
   } catch (error) {
-    if (error.noCompatibleMedia || error.emptyBody) {
-      throw error;
-    }
-    throw new Error(message(playerError) + "；视频列表接口：" + message(error));
+    // 只有两条接口都判定"没有兼容编码"才是真的无解；其余情况（缺集、空体、单边不兼容）
+    // 都算软失败，交给上层换平台、换档位、换设备继续试
+    const unsupported = !!(playerError.noCompatibleMedia && error.noCompatibleMedia);
+    const merged = failure(message(playerError) + "；视频列表接口：" + message(error), {
+      emptyBody: !unsupported,
+      noCompatibleMedia: unsupported,
+    });
+    merged.playerError = playerError;
+    merged.tabError = error;
+    throw merged;
   }
 }
 
@@ -2674,7 +2678,10 @@ function fetchTabMedia(videoId, helper, platform) {
     const root = nested(result, "data");
     const data = nested(nested(root, "video_model_data"), videoId);
     if (isEmptyRecord(data)) {
-      failures.push(new Error("红果 App 未返回所请求的分集播放信息"));
+      // 本车道没有该集：交给上层换平台（android → pc）或换车道，别整单判死
+      laneMarkCold(key);
+      blocked = failure("红果视频列表车道没有该集", { emptyBody: true });
+      failures.push(blocked);
       continue;
     }
     return mediaFromModel(appVideoModel(data));

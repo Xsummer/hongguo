@@ -69,7 +69,7 @@ const host = {
 };
 
 const context = vm.createContext({ host, module: { exports: {} }, console, Buffer, URL });
-vm.runInContext(source + "\nmodule.exports.test = { appRequest, appMedia, paths, playbackProfiles, playbackSigners, playbackLaneList, ensureDevice, currentState, deviceOf, orderedProfiles, laneKey, laneState, playbackQuery, signPlayer, signPlaybackHeaders };", context);
+vm.runInContext(source + "\nmodule.exports.test = { appRequest, appMedia, paths, playbackProfiles, playbackSigners, playbackLaneList, ensureDevice, currentState, deviceOf, orderedProfiles, laneKey, laneState, playbackQuery, signPlayer, signPlaybackHeaders, fetchTabMedia, fetchPlayerMedia };", context);
 const T = context.module.exports.test;
 
 T.ensureDevice(false, "");
@@ -110,6 +110,14 @@ for (const row of rows) {
   console.log(row[0].padEnd(width[0]) + row[1].padEnd(width[1]) + row[2].padEnd(width[2]) + row[3]);
 }
 
+console.log("");
+try {
+  const startedTab = Date.now();
+  const tabMedia = T.fetchTabMedia(videoId, false, "");
+  console.log("列表车道(fetchTabMedia) 成功: " + (Date.now() - startedTab) + "ms  " + tabMedia.quality + "p  " + tabMedia.url.slice(0, 60));
+} catch (error) {
+  console.log("列表车道(fetchTabMedia) 失败: " + error.message);
+}
 console.log("");
 const started = Date.now();
 try {
