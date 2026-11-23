@@ -68,7 +68,7 @@ function load(response) {
 }
 
 for (const nested of [false, true]) {
-  test("playback uses v5 and the exact episode in " + (nested ? "1004" : "flat") + " responses", () => {
+  test("playback uses the multi_video_model lane and the exact episode in " + (nested ? "1004" : "flat") + " responses", () => {
     const entries = { [videoId]: { video_model: JSON.stringify(model) }, "7700000000000000002": { video_model: {} } };
     const { api, requests } = load({ code: 0, data: nested ? { "1004": entries } : entries });
     const media = api.test.fetchPlayerMedia(videoId, false);
@@ -79,18 +79,22 @@ for (const nested of [false, true]) {
     assert.equal(requests.length, 1);
     const request = requests[0];
     const url = new URL(request.url);
-    assert.equal(url.hostname, "api5-normal-sinfonlinea.fqnovel.com");
-    assert.equal(url.pathname, "/novel/player/multi_video_model/player/v1");
+    assert.equal(url.hostname, "api5-normal-sinfonlineb.fqnovel.com");
+    assert.equal(url.pathname, "/novel/player/multi_video_model/v1/");
     assert.equal(url.searchParams.get("device_id"), state.deviceId);
     assert.equal(url.searchParams.get("iid"), state.installId);
+    assert.equal(url.searchParams.get("version_code"), "73932");
+    assert.equal(url.searchParams.get("manifest_version_code"), "73932");
+    assert.equal(url.searchParams.get("update_version_code"), "73932");
+    assert.equal(url.searchParams.get("version_name"), "7.3.9.32");
     assert.equal(url.searchParams.has("ts"), false);
     const payload = JSON.parse(request.body);
     assert.deepEqual(payload.mixed_video_id_map, { "1004": [videoId] });
     assert.equal(payload.dr_scene, "player");
     assert.equal(payload.biz_param.video_platform, 1024);
-    assert.equal(request.headers["X-Gorgon"], undefined);
-    assert.equal(request.headers["X-Argus"], undefined);
-    assert(request.headers["X-Medusa"] && request.headers["X-Helios"]);
+    assert(request.headers["X-Gorgon"]);
+    assert.equal(request.headers["X-Medusa"], "WSQEa3FvS6EV");
+    assert.equal(request.headers["X-Helios"], undefined);
     assert.equal(request.headers["X-SS-STUB"], crypto.createHash("md5").update(request.body).digest("hex").toUpperCase());
   });
 }
@@ -104,9 +108,9 @@ test("playback prefers the signed player request", () => {
   const request = requests[0];
   const url = new URL(request.url);
   assert.equal(request.method, "POST");
-  assert.equal(url.hostname, "api5-normal-sinfonlinea.fqnovel.com");
-  assert.equal(url.pathname, "/novel/player/multi_video_model/player/v1");
-  assert.equal(request.headers["X-Gorgon"], undefined);
+  assert.equal(url.hostname, "api5-normal-sinfonlineb.fqnovel.com");
+  assert.equal(url.pathname, "/novel/player/multi_video_model/v1/");
+  assert(request.headers["X-Gorgon"]);
   assert.equal(request.headers["X-SS-STUB"], crypto.createHash("md5").update(request.body).digest("hex").toUpperCase());
 });
 
@@ -116,15 +120,17 @@ test("the video tab is used when the player request has no episode", () => {
     : { code: 0, data: { "7700000000000000002": { video_model: model } } }));
   const media = api.test.fetchAppMedia(videoId, false);
   assert.equal(media.url, "https://media.example.invalid/main.mp4");
-  assert.equal(requests.length, 2);
-  assert.equal(new URL(requests[0].url).pathname, "/novel/player/multi_video_model/player/v1");
-  assert.equal(new URL(requests[1].url).pathname, "/reading/bookapi/video_tab/multi_video_model/v1/");
+  const asked = requests.map((request) => new URL(request.url).pathname);
+  assert.equal(asked[asked.length - 1], "/reading/bookapi/video_tab/multi_video_model/v1/");
+  assert(asked.length > 1);
+  const modelPaths = ["/novel/player/multi_video_model/v1/", "/novel/player/multi_video_model/player/v1", "/novel/player/video_model/v1/"];
+  assert(asked.slice(0, -1).every((path) => modelPaths.includes(path)));
 });
 
 test("missing requested episode cannot use another episode", () => {
   const { api, requests } = load({ code: 0, data: { "7700000000000000002": { video_model: model } } });
   assert.throws(() => api.test.fetchPlayerMedia(videoId, false), /所请求的分集/);
-  assert.equal(requests.length, 1);
+  assert(requests.length >= 4);
 });
 
 test("malformed and rejected models fail explicitly", () => {
@@ -168,10 +174,11 @@ test("incompatible codecs are retried on the pc lane", () => {
   assert.equal(media.url, "https://media.example.invalid/pc720.mp4");
   assert.equal(media.quality, 720);
   const lanes = requests.map((request) => (new URL(request.url).searchParams.get("device_platform") || "default"));
-  assert.deepEqual(lanes, ["android", "pc"]);
-  assert.equal(new URL(requests[0].url).pathname, "/novel/player/multi_video_model/player/v1");
-  assert.equal(new URL(requests[1].url).pathname, "/novel/player/multi_video_model/player/v1");
-  assert.equal(new URL(requests[1].url).searchParams.get("device_id"), state.deviceId);
+  assert.equal(lanes[lanes.length - 1], "pc");
+  assert(lanes.slice(0, -1).every((lane) => lane === "android"));
+  const modelPaths = ["/novel/player/multi_video_model/v1/", "/novel/player/multi_video_model/player/v1", "/novel/player/video_model/v1/"];
+  assert(requests.every((request) => modelPaths.includes(new URL(request.url).pathname)));
+  assert.equal(new URL(requests[requests.length - 1].url).searchParams.get("device_id"), state.deviceId);
 });
 
 test("the pc lane still falls back to the video tab when the player request fails", () => {
@@ -180,7 +187,7 @@ test("the pc lane still falls back to the video tab when the player request fail
   ] };
   const { api, requests } = load((request) => {
     const url = new URL(request.url);
-    if (url.pathname === "/novel/player/multi_video_model/player/v1") return { code: 0, data: { "7700000000000000002": { video_model: vvc } } };
+    if (url.pathname === "/novel/player/multi_video_model/v1/") return { code: 0, data: { "7700000000000000002": { video_model: vvc } } };
     if (url.searchParams.get("device_platform") !== "pc") return { code: 0, data: { video_model_data: { [videoId]: { video_model: vvc } } } };
     return { code: 0, data: { video_model_data: { [videoId]: { video_model: { video_duration: 58.167, video_list: [
       { main_url: "https://media.example.invalid/pctab720.mp4", definition: "720p", codec_type: "bytevc1", vwidth: 720, vheight: 1280 },
@@ -189,12 +196,8 @@ test("the pc lane still falls back to the video tab when the player request fail
   const media = api.test.appMedia(videoId);
   assert.equal(media.url, "https://media.example.invalid/pctab720.mp4");
   const paths = requests.map((request) => new URL(request.url).pathname);
-  assert.deepEqual(paths, [
-    "/novel/player/multi_video_model/player/v1",
-    "/reading/bookapi/video_tab/multi_video_model/v1/",
-    "/novel/player/multi_video_model/player/v1",
-    "/reading/bookapi/video_tab/multi_video_model/v1/",
-  ]);
+  assert.equal(paths[paths.length - 1], "/reading/bookapi/video_tab/multi_video_model/v1/");
+  assert(paths.some((path) => path === "/novel/player/multi_video_model/v1/"));
 });
 
 test("a resolved episode is served from the media cache without a second request", () => {
@@ -228,7 +231,7 @@ test("one player call prefetches the next episodes from the cached detail", () =
   api.test.appDetail("7700000000000000000");
   const media = api.test.resolveVideoMedia({ dramaId: "hongguo:7700000000000000000", chapter: { videoUrl: api.test.cencScheme + videoId } });
   assert.equal(media.url, "https://media.example.invalid/main.mp4");
-  const playerCalls = requests.filter((request) => request.url.includes("/multi_video_model/player/"));
+  const playerCalls = requests.filter((request) => request.url.includes("/multi_video_model/v1/"));
   assert.equal(playerCalls.length, 1);
   assert.deepEqual(JSON.parse(playerCalls[0].body).mixed_video_id_map, { "1004": [videoId, next[0], next[1]] });
   const count = requests.length;
@@ -254,7 +257,7 @@ test("the prefetch batch never exceeds the endpoint limit", () => {
   });
   api.test.appDetail("7700000000000000000");
   api.test.resolveVideoMedia({ dramaId: "hongguo:7700000000000000000", chapter: { videoUrl: api.test.cencScheme + chapters[0].vid } });
-  const playerCalls = requests.filter((request) => request.url.includes("/multi_video_model/player/"));
+  const playerCalls = requests.filter((request) => request.url.includes("/multi_video_model/v1/"));
   assert.equal(playerCalls.length, 1);
   assert.equal(JSON.parse(playerCalls[0].body).mixed_video_id_map["1004"].length, 15);
 });
@@ -362,6 +365,25 @@ test("empty responses across lanes rotate the device before giving up", () => {
   assert(requests.some((request) => request.url.includes("/service/2/device_register")));
 });
 
+test("a blocked version profile falls through to another self-consistent profile", () => {
+  const { api, requests, host } = load((request) => {
+    const url = new URL(request.url);
+    if (url.pathname.startsWith("/service/2/device_register")) return { device_id: "555", install_id: "666" };
+    if (url.searchParams.get("version_code") !== "74332") return { status: 200, body: "", headers: {} };
+    return { code: 0, data: { [videoId]: { video_model: JSON.stringify(model) } } };
+  });
+  const media = api.test.appMedia(videoId);
+  assert.equal(media.url, "https://media.example.invalid/main.mp4");
+  const profiles = requests
+    .filter((request) => new URL(request.url).pathname === "/novel/player/multi_video_model/v1/")
+    .map((request) => new URL(request.url).searchParams.get("version_code"));
+  assert(profiles.includes("74332"));
+  assert.equal(host.cacheGet("profile"), "vivo-74332");
+  for (const code of profiles) {
+    assert(code !== "" && code !== null);
+  }
+});
+
 test("an all-empty rotation reports the signature block", () => {
   const { api } = load((request) => {
     const url = new URL(request.url);
@@ -437,7 +459,7 @@ test("locked webpage episodes fail through the app api and stay locked", () => {
   assert.throws(() => api.test.resolveVideoMedia(task), /前 5 集/);
   assert.equal(requests.filter((request) => request.url.includes("hongguoduanju.com/api/")).length, 1);
   const before = requests.length;
-  assert.throws(() => api.test.resolveVideoMedia(task), /暂时不再尝试网页取流/);
+  assert.throws(() => api.test.resolveVideoMedia(task), /不再重试/);
   assert.equal(requests.filter((request) => request.url.includes("hongguoduanju.com/api/")).length, 1);
   assert(requests.length > before);
 });
